@@ -1,36 +1,35 @@
-using System.Collections;
 using UnityEngine;
 
 public class SimulatedEnemy : MonoBehaviour
 {
     public Renderer enemyRenderer;
+    
+    [Header("State Colors")]
     public Color safeColor = Color.white;
+    public Color telegraphColor = Color.yellow;
     public Color attackingColor = Color.red;
 
-    private float attackCooldown = 3.0f;
-    private float telegraphDuration = 1.0f;
-
-    private void Start()
+    private void Update()
     {
-        StartCoroutine(EnemyBehaviorLoop());
-    }
+        // Ensure CombatManager exists before trying to read from it
+        if (!CombatManager.Instance) return;
 
-    private IEnumerator EnemyBehaviorLoop()
-    {
-        while (true)
+        // Sync the enemy's color perfectly with the CombatManager's current state
+        switch (CombatManager.Instance.currentState)
         {
-            // 1. Safe Phase
-            GameStateManager.Instance.SetUrgency(false);
-            enemyRenderer.material.color = safeColor;
-            yield return new WaitForSeconds(attackCooldown);
-
-            // 2. Telegraph / Urgent Phase
-            // This immediately shifts the Bayesian Prior to favor the Dodge button
-            GameStateManager.Instance.SetUrgency(true);
-            enemyRenderer.material.color = attackingColor;
+            case CombatManager.CombatState.Safe:
+                enemyRenderer.material.color = safeColor;
+                break;
             
-            // Simulating a highly urgent window to react
-            yield return new WaitForSeconds(telegraphDuration); 
+            case CombatManager.CombatState.Telegraph:
+                // The "Window Time" where the player must prepare to dodge
+                enemyRenderer.material.color = telegraphColor;
+                break;
+            
+            case CombatManager.CombatState.Attacking:
+                // The actual hit frame
+                enemyRenderer.material.color = attackingColor;
+                break;
         }
     }
 }
