@@ -1,0 +1,33 @@
+{
+  "source_datasets_used": [
+    "tsi",
+    "touch_dynamics",
+    "mc_snake"
+  ],
+  "timestamp": "2026-05-21T01:41:49.788777+00:00",
+  "default_touch_variance": 3982.4676053523926,
+  "default_attack_variance": 3982.4676053523926,
+  "default_dodge_variance": 3982.4676053523926,
+  "recommended_hitbox_expansion_ratio": 1.8,
+  "recommended_expanded_hitbox_margin": 1.8,
+  "recommended_ambiguity_margin": 72.73238618387272,
+  "recommended_ambiguity_margin_px": 72.73238618387272,
+  "recommended_min_variance": 995.6169013380982,
+  "recommended_max_variance": 15929.87042140957,
+  "expected_touch_offset_mean": {
+    "x": 17.55052017834686,
+    "y": -12.281582256773751
+  },
+  "expected_touch_offset_std": {
+    "x": 79.72598438070926,
+    "y": 40.10863529505444
+  },
+  "recommended_default_variance": 3982.4676053523926,
+  "recommended_default_std_px": 63.106795239121375,
+  "prior_warning": "Public-derived defaults come from target-labeled TSI touch data plus unlabeled public game touch dynamics. They do not validate Unity Attack/Dodge game-state priors.",
+  "notes": [
+    "TSI supplies target labels and keyboard layout for touch-target modeling.",
+    "Touch-Dynamics and MC-Snake supply real mobile game touch dynamics but no Attack/Dodge labels or Unity button layouts.",
+    "Unity calibration overrides these defaults when available."
+  ]
+}

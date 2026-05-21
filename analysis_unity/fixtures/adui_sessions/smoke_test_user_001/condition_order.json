@@ -1,0 +1,12 @@
+{
+  "session_id": "smoke_test_user_001",
+  "participant_id": "test_user_public",
+  "condition_order": [
+    "visual_boundary",
+    "expanded_hitbox",
+    "user_gaussian",
+    "context_prior_only",
+    "context_bayesian_no_safety",
+    "context_bayesian_safety"
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "source": "public_multigame_abstract_scene_prior",
+  "model_path": "analysis_multigame/outputs/models/centroid_multigame_scene_head.json",
+  "label_mapping": {
+    "ui_phase": [
+      "gameplay",
+      "menu",
+      "loading",
+      "result",
+      "unknown"
+    ],
+    "threat_level": [
+      "none",
+      "warning",
+      "active",
+      "critical",
+      "unknown"
+    ],
+    "action_window": [
+      "engage",
+      "avoid",
+      "wait",
+      "explore",
+      "unknown"
+    ],
+    "urgency_level": [
+      "low",
+      "medium",
+      "high",
+      "unknown"
+    ]
+  },
+  "prior_table": {
+    "safe_like_engage": {
+      "attack": 0.85,
+      "dodge": 0.15
+    },
+    "warning_but_engage": {
+      "attack": 0.65,
+      "dodge": 0.35
+    },
+    "avoid_or_active_threat": {
+      "attack": 0.15,
+      "dodge": 0.85
+    },
+    "critical_threat": {
+      "attack": 0.05,
+      "dodge": 0.95
+    },
+    "unknown_or_low_confidence": {
+      "attack": 0.5,
+      "dodge": 0.5
+    }
+  },
+  "confidence_threshold": 0.35,
+  "temperature": 1.0,
+  "confidence_mixing_formula": "P_final(a)=c*P_rule(a|abstract_state)+(1-c)*P_neutral(a)",
+  "source_datasets": [
+    "vizdoom_generated_or_fixture",
+    "atari_head_manual_if_available",
+    "minerl_manual_if_available",
+    "dqn_replay_manual_if_available"
+  ],
+  "warnings": [
+    "The scene model predicts abstract state, not Attack/Dodge directly.",
+    "Weak labels are not human intention labels.",
+    "If source_type is procedural_fixture_vizdoom_install_unavailable, results are pipeline tests and not public ViZDoom evidence.",
+    "Low confidence must fall back to neutral prior and clear input preservation."
+  ]
+}

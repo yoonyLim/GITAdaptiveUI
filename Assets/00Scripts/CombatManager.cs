@@ -17,6 +17,10 @@ public class CombatManager : MonoBehaviour
     public int enemyMaxHP = 500;
     private int currentPlayerHP;
     private int currentEnemyHP;
+    public int CurrentPlayerHP => currentPlayerHP;
+    public int CurrentEnemyHP => currentEnemyHP;
+    public string LastFeedbackMessage { get; private set; } = "";
+    public Color LastFeedbackColor { get; private set; } = Color.white;
 
     public enum CombatState { Safe, Telegraph, Attacking }
     public CombatState currentState = CombatState.Safe;
@@ -148,6 +152,8 @@ public class CombatManager : MonoBehaviour
 
     private void ShowFeedback(string message, Color color)
     {
+        LastFeedbackMessage = message;
+        LastFeedbackColor = color;
         if (feedbackLogText)
         {
             feedbackLogText.text = message;
