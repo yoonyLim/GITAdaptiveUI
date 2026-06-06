@@ -79,13 +79,9 @@ public class ADUIExperimentPanel : EditorWindow
 
         if (GUILayout.Button("Show Current Posterior"))
         {
-            if (attackManager && attackManager.LastDecodeResult != null)
+            if (decoder)
             {
-                var result = attackManager.LastDecodeResult;
-                Debug.Log(
-                    $"[ADUI] Posterior: Attack={result.posteriorAttack:F3}, Dodge={result.posteriorDodge:F3}, " +
-                    $"gap={result.posteriorGap:F3}, final={result.finalExecutedAction}, reason={result.safetyGateReason}"
-                );
+                Debug.Log("[ADUI] Roguelike-priority AdaptiveTouchManager does not expose LastDecodeResult. Use runtime console logs or JSONL decision logs when the full ADUI decoder is enabled.");
             }
             else Debug.Log("[ADUI] No decode result yet. Tap a button area first.");
         }
@@ -115,12 +111,11 @@ public class ADUIExperimentPanel : EditorWindow
             demandModel.externalInformationPriority = EditorGUILayout.Slider("Info Priority", demandModel.externalInformationPriority, 0f, 1f);
             demandModel.externalOcclusionRisk = EditorGUILayout.Slider("Occlusion Risk", demandModel.externalOcclusionRisk, 0f, 1f);
         }
-        if (attackManager && attackManager.LastPolicy != null)
+        if (attackManager)
         {
-            EditorGUILayout.LabelField("Current Mode", attackManager.LastPolicy.mode.ToString());
-            EditorGUILayout.LabelField("Policy Reason", attackManager.LastPolicy.policyReason);
-            EditorGUILayout.LabelField("Correction Strength", attackManager.LastPolicy.correctionStrength.ToString("F2"));
-            EditorGUILayout.LabelField("Hitbox Expansion", attackManager.LastPolicy.hitboxExpansionRatio.ToString("F2"));
+            EditorGUILayout.LabelField("Runtime Manager", "Roguelike-priority AdaptiveTouchManager");
+            EditorGUILayout.LabelField("Touch Variance", attackManager.userTouchVariance.ToString("F1"));
+            EditorGUILayout.LabelField("Min Threshold", attackManager.minLikelihoodThreshold.ToString("F3"));
         }
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Dataset Save Path", session ? session.sessionDirectory : "(session not started)");

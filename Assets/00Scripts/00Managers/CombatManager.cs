@@ -38,11 +38,6 @@ public class CombatManager : MonoBehaviour
     [HideInInspector] public float priorDodge = 0.5f;
 
     public CombatContext CurrentContext { get; private set; }
-    public int playerMaxHP => playerController != null ? playerController.maxHP : 100;
-    public int CurrentPlayerHP => playerController != null ? playerController.CurrentHP : 0;
-    public int CurrentEnemyHP => CalculateTotalEnemyHP();
-    public string LastFeedbackMessage { get; private set; } = "";
-    public Color LastFeedbackColor { get; private set; } = Color.white;
 
     private float feedbackClearTime;
 
@@ -129,9 +124,6 @@ public class CombatManager : MonoBehaviour
 
     public void ReportFeedback(string message, Color color)
     {
-        LastFeedbackMessage = message;
-        LastFeedbackColor = color;
-
         if (feedbackLogText != null)
         {
             feedbackLogText.text = message;
@@ -140,38 +132,6 @@ public class CombatManager : MonoBehaviour
         }
 
         Debug.Log(message);
-    }
-
-    private int CalculateTotalEnemyHP()
-    {
-        int total = 0;
-
-        if (gameManager != null)
-        {
-            IReadOnlyList<EnemyControllerBase> enemies = gameManager.ActiveEnemies;
-            for (int i = 0; i < enemies.Count; i++)
-            {
-                EnemyControllerBase enemy = enemies[i];
-                if (enemy != null && enemy.IsAlive)
-                {
-                    total += enemy.CurrentHP;
-                }
-            }
-
-            return total;
-        }
-
-        EnemyControllerBase[] sceneEnemies = FindObjectsByType<EnemyControllerBase>();
-        for (int i = 0; i < sceneEnemies.Length; i++)
-        {
-            EnemyControllerBase enemy = sceneEnemies[i];
-            if (enemy != null && enemy.IsAlive)
-            {
-                total += enemy.CurrentHP;
-            }
-        }
-
-        return total;
     }
 
     private void ResolveReferences()
