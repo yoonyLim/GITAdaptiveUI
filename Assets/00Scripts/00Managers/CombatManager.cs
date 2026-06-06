@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
@@ -21,6 +22,8 @@ public class CombatManager : MonoBehaviour
     [Header("Bayesian Prior Tuning")]
     public float baseAttackScore = 0.85f;
     public float baseDodgeScore = 0.45f;
+    public float baseHealScore = 0.08f;
+    public float baseWhirlwindScore = 0.12f;
     public float closeEnemyRadius = 3f;
     public float projectileNearRadius = 0.95f;
     public float projectileLookAheadSeconds = 0.75f;
@@ -36,6 +39,8 @@ public class CombatManager : MonoBehaviour
 
     [HideInInspector] public float priorAttack = 0.5f;
     [HideInInspector] public float priorDodge = 0.5f;
+    [HideInInspector] public float priorHeal = 0.05f;
+    [HideInInspector] public float priorWhirlwind = 0.05f;
 
     public CombatContext CurrentContext { get; private set; }
 
@@ -51,6 +56,7 @@ public class CombatManager : MonoBehaviour
         public int telegraphingEnemies;
         public int attackingEnemies;
         public int incomingProjectiles;
+        public int whirlwindTargets;
         public EnemyKind closestEnemyKind;
         public string closestEnemyName;
         public float closestEnemyDistance;
@@ -122,6 +128,75 @@ public class CombatManager : MonoBehaviour
         ReportFeedback("Dodge accepted.", Color.cyan);
     }
 
+    public void OnPlayerHeal()
+    {
+        ResolveReferences();
+
+        if (playerController == null)
+        {
+            ReportFeedback("No player found.", Color.red);
+            return;
+        }
+
+        if (playerController.HealCooldownRemaining > 0f)
+        {
+            ReportFeedback($"Heal cooldown: {playerController.HealCooldownRemaining:F1}s.", Color.gray);
+            return;
+        }
+
+        if (playerController.CurrentHP >= playerController.maxHP)
+        {
+            ReportFeedback("Heal skipped: HP is already full.", Color.gray);
+            return;
+        }
+
+        if (playerController.TryHeal(out int amountHealed))
+        {
+            ReportFeedback($"Healed {amountHealed} HP.", Color.green);
+        }
+    }
+
+    public void OnPlayerWhirlwind()
+    {
+        ResolveReferences();
+
+        if (playerController == null)
+        {
+            ReportFeedback("No player found.", Color.red);
+            return;
+        }
+
+        if (playerController.WhirlwindCooldownRemaining > 0f)
+        {
+            ReportFeedback($"Whirlwind cooldown: {playerController.WhirlwindCooldownRemaining:F1}s.", Color.gray);
+            return;
+        }
+
+        List<EnemyControllerBase> targets = FindWhirlwindTargets();
+        if (targets.Count == 0)
+        {
+            ReportFeedback("Whirlwind missed: no nearby enemies.", Color.gray);
+            return;
+        }
+
+        if (!playerController.TryStartWhirlwindCooldown())
+        {
+            ReportFeedback($"Whirlwind cooldown: {playerController.WhirlwindCooldownRemaining:F1}s.", Color.gray);
+            return;
+        }
+
+        for (int i = 0; i < targets.Count; i++)
+        {
+            if (targets[i] != null)
+            {
+                targets[i].TakeDamage(playerController.whirlwindDamage);
+            }
+        }
+
+        StartCoroutine(ShowWhirlwindVisual(playerController.transform.position, playerController.whirlwindRange));
+        ReportFeedback($"Whirlwind hit {targets.Count} enemies.", new Color(1f, 0.82f, 0.18f, 1f));
+    }
+
     public void ReportFeedback(string message, Color color)
     {
         if (feedbackLogText != null)
@@ -157,7 +232,10 @@ public class CombatManager : MonoBehaviour
 
         float attackScore = baseAttackScore;
         float dodgeScore = baseDodgeScore;
+        float healScore = baseHealScore;
+        float whirlwindScore = baseWhirlwindScore;
         float playerAttackRange = playerController != null ? playerController.attackRange : 2f;
+        float playerWhirlwindRange = playerController != null ? playerController.whirlwindRange : 3f;
 
         if (gameManager != null)
         {
@@ -171,6 +249,11 @@ public class CombatManager : MonoBehaviour
                 }
 
                 AddEnemyToContext(enemy, ref context, ref attackScore, ref dodgeScore, playerAttackRange);
+
+                if (playerController != null && enemy.DistanceToPlayer <= playerWhirlwindRange)
+                {
+                    context.whirlwindTargets++;
+                }
             }
         }
         else
@@ -185,6 +268,11 @@ public class CombatManager : MonoBehaviour
                 }
 
                 AddEnemyToContext(enemy, ref context, ref attackScore, ref dodgeScore, playerAttackRange);
+
+                if (playerController != null && enemy.DistanceToPlayer <= playerWhirlwindRange)
+                {
+                    context.whirlwindTargets++;
+                }
             }
         }
 
@@ -206,15 +294,16 @@ public class CombatManager : MonoBehaviour
             dodgeScore += 0.75f;
         }
 
+        ApplySkillScores(context, ref healScore, ref whirlwindScore);
+
         if (context.totalEnemies == 0)
         {
             attackScore = 0.5f;
             dodgeScore = 0.5f;
+            whirlwindScore = 0.01f;
         }
 
-        float totalScore = Mathf.Max(0.001f, attackScore + dodgeScore);
-        priorAttack = Mathf.Clamp(attackScore / totalScore, 0.05f, 0.95f);
-        priorDodge = 1f - priorAttack;
+        NormalizePriors(attackScore, dodgeScore, healScore, whirlwindScore);
 
         if (context.attackingEnemies > 0 || context.incomingProjectiles > 0)
         {
@@ -290,6 +379,69 @@ public class CombatManager : MonoBehaviour
         }
     }
 
+    private void ApplySkillScores(CombatContext context, ref float healScore, ref float whirlwindScore)
+    {
+        if (playerController == null)
+        {
+            healScore = 0.01f;
+            whirlwindScore = 0.01f;
+            return;
+        }
+
+        if (playerController.CanHeal)
+        {
+            float missingRatio = playerController.MissingHpRatio;
+            healScore += Mathf.Lerp(0f, 4.2f, missingRatio);
+
+            if (playerController.CurrentHP <= playerController.maxHP * 0.35f)
+            {
+                healScore += 1.5f;
+            }
+
+            if (currentState == CombatState.Attacking)
+            {
+                healScore += 0.35f;
+            }
+        }
+        else
+        {
+            healScore = 0.01f;
+        }
+
+        if (playerController.CanWhirlwind && context.whirlwindTargets > 0)
+        {
+            whirlwindScore += context.whirlwindTargets * 1.15f;
+
+            if (context.whirlwindTargets >= 3)
+            {
+                whirlwindScore += 1.4f;
+            }
+
+            if (context.closeEnemies >= 5)
+            {
+                whirlwindScore += 0.8f;
+            }
+        }
+        else
+        {
+            whirlwindScore = 0.01f;
+        }
+    }
+
+    private void NormalizePriors(float attackScore, float dodgeScore, float healScore, float whirlwindScore)
+    {
+        attackScore = Mathf.Max(0.001f, attackScore);
+        dodgeScore = Mathf.Max(0.001f, dodgeScore);
+        healScore = Mathf.Max(0.001f, healScore);
+        whirlwindScore = Mathf.Max(0.001f, whirlwindScore);
+
+        float totalScore = Mathf.Max(0.001f, attackScore + dodgeScore + healScore + whirlwindScore);
+        priorAttack = Mathf.Clamp01(attackScore / totalScore);
+        priorDodge = Mathf.Clamp01(dodgeScore / totalScore);
+        priorHeal = Mathf.Clamp01(healScore / totalScore);
+        priorWhirlwind = Mathf.Clamp01(whirlwindScore / totalScore);
+    }
+
     private int CountIncomingProjectiles()
     {
         if (playerController == null)
@@ -340,6 +492,49 @@ public class CombatManager : MonoBehaviour
         }
 
         return best;
+    }
+
+    private List<EnemyControllerBase> FindWhirlwindTargets()
+    {
+        List<EnemyControllerBase> targets = new List<EnemyControllerBase>();
+
+        if (gameManager == null || playerController == null)
+        {
+            return targets;
+        }
+
+        IReadOnlyList<EnemyControllerBase> enemies = gameManager.ActiveEnemies;
+        for (int i = 0; i < enemies.Count; i++)
+        {
+            EnemyControllerBase enemy = enemies[i];
+            if (enemy == null || !enemy.IsAlive)
+            {
+                continue;
+            }
+
+            if (enemy.DistanceToPlayer <= playerController.whirlwindRange)
+            {
+                targets.Add(enemy);
+            }
+        }
+
+        return targets;
+    }
+
+    private IEnumerator ShowWhirlwindVisual(Vector2 position, float radius)
+    {
+        GameObject visual = PrototypeVisualFactory.CreateTelegraphCircle(
+            "Whirlwind Slash",
+            position,
+            radius,
+            new Color(1f, 0.82f, 0.18f, 0.34f));
+
+        yield return new WaitForSeconds(0.22f);
+
+        if (visual != null)
+        {
+            Destroy(visual);
+        }
     }
 
     private Vector2 CalculateDodgeDirection()
@@ -477,7 +672,8 @@ public class CombatManager : MonoBehaviour
 
         if (priorText != null)
         {
-            priorText.text = $"P(Attack) {priorAttack:P0}   P(Dodge) {priorDodge:P0}";
+            priorText.text =
+                $"P(A) {priorAttack:P0}   P(D) {priorDodge:P0}   P(H) {priorHeal:P0}   P(W) {priorWhirlwind:P0}";
         }
 
         if (contextText != null)
@@ -486,8 +682,12 @@ public class CombatManager : MonoBehaviour
                 ? $"{CurrentContext.closestEnemyName} {CurrentContext.closestEnemyDistance:F1}m"
                 : "None";
 
+            string skillText = playerController != null
+                ? $"HealCD {playerController.HealCooldownRemaining:F1}s   WhirlCD {playerController.WhirlwindCooldownRemaining:F1}s"
+                : "Skills unavailable";
+
             contextText.text =
-                $"Closest: {closestText}   Close: {CurrentContext.closeEnemies}   Telegraphs: {CurrentContext.telegraphingEnemies}   Arrows: {CurrentContext.incomingProjectiles}";
+                $"Closest: {closestText}   Close: {CurrentContext.closeEnemies}   Whirl targets: {CurrentContext.whirlwindTargets}   Arrows: {CurrentContext.incomingProjectiles}   {skillText}";
         }
 
         if (feedbackLogText != null && feedbackLogText.text.Length > 0 && Time.time > feedbackClearTime)

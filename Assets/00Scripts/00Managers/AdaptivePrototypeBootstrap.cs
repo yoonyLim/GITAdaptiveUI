@@ -29,12 +29,14 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         TextMeshProUGUI stateText = CreateText(canvas.transform, "State Text", "Context", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(250f, -78f), new Vector2(460f, 38f), 20, TextAlignmentOptions.Left);
         TextMeshProUGUI playerHpText = CreateText(canvas.transform, "Player HP Text", "Player HP", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(250f, -116f), new Vector2(460f, 34f), 18, TextAlignmentOptions.Left);
         TextMeshProUGUI enemyText = CreateText(canvas.transform, "Enemy Context Text", "Enemies", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(300f, -152f), new Vector2(560f, 34f), 18, TextAlignmentOptions.Left);
-        TextMeshProUGUI priorText = CreateText(canvas.transform, "Prior Text", "P(Attack) 50%   P(Dodge) 50%", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(312f, -188f), new Vector2(590f, 34f), 18, TextAlignmentOptions.Left);
-        TextMeshProUGUI contextText = CreateText(canvas.transform, "Detailed Context Text", "Closest: None", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(370f, -224f), new Vector2(700f, 34f), 17, TextAlignmentOptions.Left);
+        TextMeshProUGUI priorText = CreateText(canvas.transform, "Prior Text", "P(A) 50%   P(D) 50%   P(H) 0%   P(W) 0%", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(405f, -188f), new Vector2(780f, 34f), 18, TextAlignmentOptions.Left);
+        TextMeshProUGUI contextText = CreateText(canvas.transform, "Detailed Context Text", "Closest: None", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(520f, -224f), new Vector2(1000f, 34f), 17, TextAlignmentOptions.Left);
         TextMeshProUGUI feedbackText = CreateText(canvas.transform, "Feedback Text", string.Empty, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 52f), new Vector2(700f, 42f), 22, TextAlignmentOptions.Center);
 
-        Image attackImage = CreateActionButton(canvas.transform, "Attack Button", "Attack", new Vector2(1f, 0f), new Vector2(-160f, 150f), new Color(0.95f, 0.22f, 0.18f, 0.88f), out RectTransform attackHitbox);
-        Image dodgeImage = CreateActionButton(canvas.transform, "Dodge Button", "Dodge", new Vector2(1f, 0f), new Vector2(-340f, 118f), new Color(0.12f, 0.58f, 1f, 0.88f), out RectTransform dodgeHitbox);
+        Image attackImage = CreateActionButton(canvas.transform, "Attack Button", "Attack", new Vector2(1f, 0f), new Vector2(-150f, 150f), new Color(0.95f, 0.22f, 0.18f, 0.88f), out RectTransform attackHitbox, out _);
+        Image dodgeImage = CreateActionButton(canvas.transform, "Dodge Button", "Dodge", new Vector2(1f, 0f), new Vector2(-320f, 118f), new Color(0.12f, 0.58f, 1f, 0.88f), out RectTransform dodgeHitbox, out _);
+        Image healImage = CreateActionButton(canvas.transform, "Heal Button", "Heal", new Vector2(1f, 0f), new Vector2(-150f, 320f), new Color(0.18f, 0.78f, 0.38f, 0.88f), out RectTransform healHitbox, out TextMeshProUGUI healLabel);
+        Image whirlwindImage = CreateActionButton(canvas.transform, "Whirlwind Button", "Whirlwind", new Vector2(1f, 0f), new Vector2(-320f, 288f), new Color(1f, 0.68f, 0.12f, 0.88f), out RectTransform whirlwindHitbox, out TextMeshProUGUI whirlwindLabel);
         Button skipButton = CreateSkipButton(canvas.transform);
 
         GameObject managerObject = new GameObject("Game Manager");
@@ -59,8 +61,14 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         touchManager.mainCanvas = canvas;
         touchManager.visualAttackButton = attackImage;
         touchManager.visualDodgeButton = dodgeImage;
+        touchManager.visualHealButton = healImage;
+        touchManager.visualWhirlwindButton = whirlwindImage;
+        touchManager.healButtonLabel = healLabel;
+        touchManager.whirlwindButtonLabel = whirlwindLabel;
         touchManager.attackHitboxVisualizer = attackHitbox;
         touchManager.dodgeHitboxVisualizer = dodgeHitbox;
+        touchManager.healHitboxVisualizer = healHitbox;
+        touchManager.whirlwindHitboxVisualizer = whirlwindHitbox;
     }
 
     private void CreateCameraIfNeeded()
@@ -134,7 +142,8 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         Vector2 anchor,
         Vector2 anchoredPosition,
         Color color,
-        out RectTransform hitbox)
+        out RectTransform hitbox,
+        out TextMeshProUGUI labelText)
     {
         RectTransform buttonTransform = CreateRectTransform(name, parent, anchor, anchor, anchoredPosition, new Vector2(150f, 150f));
         Image image = buttonTransform.gameObject.AddComponent<Image>();
@@ -144,12 +153,13 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
 
         hitbox = CreateRectTransform(name + " Hitbox", buttonTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(180f, 180f));
         Image hitboxImage = hitbox.gameObject.AddComponent<Image>();
-        hitboxImage.sprite = PrototypeVisualFactory.SquareSprite;
-        hitboxImage.color = label == "Attack" ? new Color(1f, 0f, 0f, 0.18f) : new Color(0f, 0.45f, 1f, 0.18f);
+        hitboxImage.sprite = PrototypeVisualFactory.CircleSprite;
+        hitboxImage.color = new Color(color.r, color.g, color.b, 0.18f);
         hitboxImage.raycastTarget = false;
 
-        TextMeshProUGUI text = CreateText(buttonTransform, label + " Text", label, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(140f, 44f), 24, TextAlignmentOptions.Center);
-        text.color = Color.white;
+        labelText = CreateText(buttonTransform, label + " Text", label, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(140f, 44f), 24, TextAlignmentOptions.Center);
+        labelText.fontSize = label.Length > 7 ? 17f : 24f;
+        labelText.color = Color.white;
         return image;
     }
 

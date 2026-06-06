@@ -16,6 +16,14 @@ public class PlayerController : MonoBehaviour
     public int attackDamage = 18;
     public float attackRange = 2.05f;
 
+    [Header("Skills")]
+    [Range(0.05f, 1f)]
+    public float healPercent = 0.2f;
+    public float healCooldown = 5f;
+    public int whirlwindDamage = 16;
+    public float whirlwindRange = 3.15f;
+    public float whirlwindCooldown = 7f;
+
     [Header("Visuals")]
     public Color bodyColor = new Color(0.2f, 0.75f, 1f, 1f);
     public Color invulnerableColor = new Color(0.65f, 0.95f, 1f, 0.75f);
@@ -23,6 +31,11 @@ public class PlayerController : MonoBehaviour
     public int CurrentHP => currentHP;
     public bool IsDodging => isDodging;
     public bool IsInvulnerable => invulnerableUntil > Time.time;
+    public float MissingHpRatio => maxHP <= 0 ? 0f : Mathf.Clamp01((maxHP - currentHP) / (float)maxHP);
+    public float HealCooldownRemaining => Mathf.Max(0f, nextHealReadyTime - Time.time);
+    public float WhirlwindCooldownRemaining => Mathf.Max(0f, nextWhirlwindReadyTime - Time.time);
+    public bool CanHeal => currentHP < maxHP && HealCooldownRemaining <= 0f;
+    public bool CanWhirlwind => WhirlwindCooldownRemaining <= 0f;
     public event Action<int, int> OnHpChanged;
 
     private Rigidbody2D rb;
@@ -33,6 +46,8 @@ public class PlayerController : MonoBehaviour
     private bool isDodging;
     private bool actionInputActive;
     private float invulnerableUntil;
+    private float nextHealReadyTime;
+    private float nextWhirlwindReadyTime;
     private Coroutine dodgeRoutine;
 
     private void Awake()
@@ -114,6 +129,8 @@ public class PlayerController : MonoBehaviour
         actionInputActive = false;
         invulnerableUntil = 0f;
         isDodging = false;
+        nextHealReadyTime = 0f;
+        nextWhirlwindReadyTime = 0f;
 
         if (dodgeRoutine != null)
         {
@@ -153,6 +170,35 @@ public class PlayerController : MonoBehaviour
             Debug.Log("Player Died!");
         }
 
+        return true;
+    }
+
+    public bool TryHeal(out int amountHealed)
+    {
+        amountHealed = 0;
+
+        if (!CanHeal)
+        {
+            return false;
+        }
+
+        int healAmount = Mathf.Max(1, Mathf.CeilToInt(maxHP * healPercent));
+        int previousHP = currentHP;
+        currentHP = Mathf.Min(maxHP, currentHP + healAmount);
+        amountHealed = currentHP - previousHP;
+        nextHealReadyTime = Time.time + healCooldown;
+        OnHpChanged?.Invoke(currentHP, maxHP);
+        return amountHealed > 0;
+    }
+
+    public bool TryStartWhirlwindCooldown()
+    {
+        if (!CanWhirlwind)
+        {
+            return false;
+        }
+
+        nextWhirlwindReadyTime = Time.time + whirlwindCooldown;
         return true;
     }
 
