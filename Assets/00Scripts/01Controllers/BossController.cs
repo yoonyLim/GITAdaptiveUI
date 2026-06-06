@@ -1,87 +1,201 @@
 using System.Collections;
 using UnityEngine;
 
-public class BossController : MonoBehaviour
+public class BossController : EnemyControllerBase
 {
-    public Transform player;
-    public float attackCooldown = 4f;
-    
-    [Header("Telegraph Prefabs")]
-    // A translucent red circle sprite
-    public GameObject smashWarningPrefab; 
-    // A translucent red rectangle/line sprite
+    [Header("Boss Patterns")]
+    public float smashRadius = 2.65f;
+    public float shockwaveLength = 12f;
+    public float shockwaveWidth = 1.15f;
+    public float bossKeepDistance = 4.5f;
+
+    [Header("Optional Telegraph Prefabs")]
+    public GameObject smashWarningPrefab;
     public GameObject shockwaveWarningPrefab;
 
-    private void Start()
+    protected override void Awake()
     {
-        player = GameObject.FindGameObjectWithTag("Player").transform;
-        StartCoroutine(BossBehaviorLoop());
+        enemyKind = EnemyKind.Boss;
+        displayName = "Boss";
+        base.Awake();
     }
 
-    private IEnumerator BossBehaviorLoop()
+    protected override void TickBehavior()
     {
-        // Give player a second before boss starts attacking
-        yield return new WaitForSeconds(1f); 
-
-        while (true)
+        if (IsTelegraphing || IsAttacking)
         {
-            // Randomly pick attack pattern (0 = Smash, 1 = Shockwave)
-            int attackType = Random.Range(0, 2);
+            return;
+        }
 
-            if (attackType == 0)
-                yield return StartCoroutine(SmashAttack());
-            else
-                yield return StartCoroutine(ShockwaveAttack());
+        if (DistanceToPlayer > bossKeepDistance + 1.75f)
+        {
+            MoveToward(playerTransform.position, 0.55f);
+        }
+        else if (DistanceToPlayer < bossKeepDistance - 1.25f)
+        {
+            MoveAwayFrom(playerTransform.position, 0.45f);
+        }
 
-            yield return new WaitForSeconds(attackCooldown);
+        if (!CanStartAttack())
+        {
+            return;
+        }
+
+        if (Random.value < 0.5f)
+        {
+            StartCoroutine(SmashAttack());
+        }
+        else
+        {
+            StartCoroutine(ShockwaveAttack());
+        }
+    }
+
+    protected override void EnsureBaseVisual()
+    {
+        bodyRenderer = PrototypeVisualFactory.EnsureSpriteRenderer(
+            gameObject,
+            PrototypeVisualFactory.CircleSprite,
+            normalColor,
+            Vector2.one * 1.75f,
+            3);
+
+        if (transform.Find("BossCrown") == null)
+        {
+            PrototypeVisualFactory.CreateChildSprite(
+                "BossCrown",
+                transform,
+                PrototypeVisualFactory.SquareSprite,
+                new Color(1f, 0.82f, 0.18f, 1f),
+                new Vector2(0.64f, 0.28f),
+                new Vector2(-0.05f, 0.62f),
+                0f,
+                6);
         }
     }
 
     private IEnumerator SmashAttack()
     {
-        Debug.Log("Boss preparing Smash!");
-        
-        // 1. Telegraph (Foreshadowing)
-        Vector3 targetPos = player.position;
-        GameObject warning = Instantiate(smashWarningPrefab, targetPos, Quaternion.identity);
-        
-        // Wait for player to react
-        yield return new WaitForSeconds(1.5f);
-        
-        // 2. Execute Attack
-        Destroy(warning);
-        Debug.Log("Boss SMASHES!");
-        
-        // Check distance to apply damage
-        if (Vector2.Distance(player.position, targetPos) < 3f) // Assuming 3f radius
+        IsTelegraphing = true;
+        SetBodyColor(telegraphColor);
+
+        Vector2 targetPosition = playerTransform != null ? playerTransform.position : transform.position;
+        GameObject warning = CreateSmashWarning(targetPosition);
+
+        yield return new WaitForSeconds(telegraphDuration);
+        DestroyTrackedTelegraph(warning);
+
+        IsTelegraphing = false;
+        IsAttacking = true;
+        SetBodyColor(attackColor);
+
+        GameObject impact = TrackTelegraph(PrototypeVisualFactory.CreateTelegraphCircle(
+            "Smash Impact",
+            targetPosition,
+            smashRadius,
+            new Color(1f, 0.5f, 0.05f, 0.38f)));
+
+        if (playerTransform != null && playerController != null &&
+            Vector2.Distance(playerTransform.position, targetPosition) <= smashRadius)
         {
-            player.GetComponent<PlayerController>().TakeDamage(30);
+            playerController.TakeDamage(attackDamage);
         }
+
+        yield return new WaitForSeconds(attackFrameDuration + 0.12f);
+        DestroyTrackedTelegraph(impact);
+
+        IsAttacking = false;
+        SetBodyColor(normalColor);
+        nextAttackTime = Time.time + attackCooldown;
     }
 
     private IEnumerator ShockwaveAttack()
     {
-        Debug.Log("Boss preparing Shockwave!");
+        IsTelegraphing = true;
+        SetBodyColor(telegraphColor);
 
-        // 1. Telegraph
-        Vector2 direction = (player.position - transform.position).normalized;
-        float angle = Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg;
-        
-        GameObject warning = Instantiate(shockwaveWarningPrefab, transform.position, Quaternion.Euler(0, 0, angle));
-        
-        // Wait for player to react
-        yield return new WaitForSeconds(1.5f);
+        Vector2 origin = transform.position;
+        Vector2 direction = DirectionToPlayer();
+        GameObject warning = CreateShockwaveWarning(origin, direction);
 
-        // 2. Execute Attack
-        Destroy(warning);
-        Debug.Log("Boss fires SHOCKWAVE!");
+        yield return new WaitForSeconds(telegraphDuration);
+        DestroyTrackedTelegraph(warning);
 
-        // In a full game, you would spawn a fast-moving projectile here. 
-        // For prototyping, we check if player is in the line of fire.
-        RaycastHit2D hit = Physics2D.Raycast(transform.position, direction, 15f, LayerMask.GetMask("Player"));
-        if (hit.collider != null)
+        IsTelegraphing = false;
+        IsAttacking = true;
+        SetBodyColor(attackColor);
+
+        GameObject impact = TrackTelegraph(PrototypeVisualFactory.CreateTelegraphLine(
+            "Shockwave Impact",
+            origin,
+            direction,
+            shockwaveLength,
+            shockwaveWidth,
+            new Color(1f, 0.45f, 0f, 0.42f)));
+
+        if (playerTransform != null && playerController != null &&
+            PrototypeVisualFactory.PointInLineArea(playerTransform.position, origin, direction, shockwaveLength, shockwaveWidth))
         {
-            player.GetComponent<PlayerController>().TakeDamage(20);
+            playerController.TakeDamage(Mathf.Max(1, Mathf.RoundToInt(attackDamage * 0.75f)));
         }
+
+        yield return new WaitForSeconds(attackFrameDuration + 0.16f);
+        DestroyTrackedTelegraph(impact);
+
+        IsAttacking = false;
+        SetBodyColor(normalColor);
+        nextAttackTime = Time.time + attackCooldown;
+    }
+
+    private GameObject CreateSmashWarning(Vector2 targetPosition)
+    {
+        if (smashWarningPrefab != null)
+        {
+            GameObject warning = Instantiate(smashWarningPrefab, targetPosition, Quaternion.identity);
+            warning.transform.localScale = Vector3.one * smashRadius * 2f;
+            return TrackTelegraph(warning);
+        }
+
+        return TrackTelegraph(PrototypeVisualFactory.CreateTelegraphCircle(
+            "Smash Warning",
+            targetPosition,
+            smashRadius,
+            new Color(1f, 0f, 0f, 0.25f)));
+    }
+
+    private GameObject CreateShockwaveWarning(Vector2 origin, Vector2 direction)
+    {
+        if (shockwaveWarningPrefab != null)
+        {
+            Vector2 safeDirection = direction.sqrMagnitude > 0.001f ? direction.normalized : Vector2.right;
+            Quaternion rotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(safeDirection.y, safeDirection.x) * Mathf.Rad2Deg);
+            GameObject warning = Instantiate(shockwaveWarningPrefab, origin + safeDirection * (shockwaveLength * 0.5f), rotation);
+            warning.transform.localScale = new Vector3(shockwaveLength, shockwaveWidth, 1f);
+            return TrackTelegraph(warning);
+        }
+
+        return TrackTelegraph(PrototypeVisualFactory.CreateTelegraphLine(
+            "Shockwave Warning",
+            origin,
+            direction,
+            shockwaveLength,
+            shockwaveWidth,
+            new Color(1f, 0f, 0f, 0.24f)));
+    }
+
+    private void Reset()
+    {
+        enemyKind = EnemyKind.Boss;
+        displayName = "Boss";
+        maxHP = 360;
+        moveSpeed = 1.35f;
+        attackRange = 3f;
+        attackCooldown = 2.65f;
+        telegraphDuration = 1.25f;
+        attackFrameDuration = 0.22f;
+        attackDamage = 24;
+        normalColor = new Color(0.55f, 0.18f, 0.72f, 1f);
+        telegraphColor = new Color(1f, 0.55f, 0.1f, 1f);
+        attackColor = new Color(1f, 0.05f, 0.05f, 1f);
     }
 }

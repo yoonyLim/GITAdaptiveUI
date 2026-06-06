@@ -1,57 +1,266 @@
+using System;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
 public class PlayerController : MonoBehaviour
 {
-    public float movementSpeed = 0;
-    private Vector2 _inputVector;
-    
+    [Header("Movement")]
+    public float movementSpeed = 5f;
+    public float dodgeDistance = 2.35f;
+    public float dodgeDuration = 0.22f;
+    public float dodgeInvulnerability = 0.42f;
+
+    [Header("Combat")]
     public int maxHP = 100;
-    private int _currentHP;
-    
-    private Rigidbody2D _rb;
+    public int attackDamage = 18;
+    public float attackRange = 2.05f;
+
+    [Header("Visuals")]
+    public Color bodyColor = new Color(0.2f, 0.75f, 1f, 1f);
+    public Color invulnerableColor = new Color(0.65f, 0.95f, 1f, 0.75f);
+
+    public int CurrentHP => currentHP;
+    public bool IsDodging => isDodging;
+    public bool IsInvulnerable => invulnerableUntil > Time.time;
+    public event Action<int, int> OnHpChanged;
+
+    private Rigidbody2D rb;
+    private SpriteRenderer bodyRenderer;
+    private Vector2 inputVector;
+    private Vector2 lastNonZeroDirection = Vector2.right;
+    private int currentHP;
+    private bool isDodging;
+    private bool actionInputActive;
+    private float invulnerableUntil;
+    private Coroutine dodgeRoutine;
 
     private void Awake()
     {
-        _rb = GetComponent<Rigidbody2D>();
-        ResetStats();
+        rb = GetComponent<Rigidbody2D>();
+        if (rb == null)
+        {
+            rb = gameObject.AddComponent<Rigidbody2D>();
+        }
+
+        rb.gravityScale = 0f;
+        rb.freezeRotation = true;
+
+        if (GetComponent<Collider2D>() == null)
+        {
+            CircleCollider2D collider = gameObject.AddComponent<CircleCollider2D>();
+            collider.radius = 0.42f;
+        }
+
+        try
+        {
+            gameObject.tag = "Player";
+        }
+        catch (UnityException)
+        {
+            Debug.LogWarning("The built-in Player tag is unavailable; enemy lookup will use manager references instead.");
+        }
+
+        bodyRenderer = PrototypeVisualFactory.EnsureSpriteRenderer(
+            gameObject,
+            PrototypeVisualFactory.CircleSprite,
+            bodyColor,
+            Vector2.one * 0.9f,
+            4);
+
+        ResetStats(false);
     }
 
     private void Update()
     {
-        Move();
+        ReadKeyboardFallback();
+        UpdateVisualState();
     }
-    
-    void Move()
+
+    private void FixedUpdate()
     {
-        Vector3 dir = transform.forward * _inputVector.y + transform.right * _inputVector.x;
-        dir *= movementSpeed;
-        dir.y = _rb.linearVelocity.y; 
-        _rb.linearVelocity = dir;
+        if (isDodging)
+        {
+            return;
+        }
+
+        rb.linearVelocity = inputVector * movementSpeed;
     }
-    
+
     public void OnMove(InputAction.CallbackContext context)
     {
         if (context.phase == InputActionPhase.Performed)
         {
-            _inputVector = context.ReadValue<Vector2>();
+            inputVector = Vector2.ClampMagnitude(context.ReadValue<Vector2>(), 1f);
+            actionInputActive = inputVector.sqrMagnitude > 0.001f;
+            RememberDirection(inputVector);
         }
         else if (context.phase == InputActionPhase.Canceled)
         {
-            _inputVector = Vector2.zero;
+            actionInputActive = false;
+            inputVector = Vector2.zero;
         }
     }
 
     public void ResetStats()
     {
-        _currentHP = maxHP;
-        Debug.Log("Player stats reset to full.");
-        // Reset stamina, buffs, or other roguelike stats here
+        ResetStats(true);
     }
 
-    public void TakeDamage(int damage)
+    public void ResetStats(bool resetPosition)
     {
-        _currentHP -= damage;
-        if (_currentHP <= 0) Debug.Log("Player Died!");
+        currentHP = maxHP;
+        inputVector = Vector2.zero;
+        actionInputActive = false;
+        invulnerableUntil = 0f;
+        isDodging = false;
+
+        if (dodgeRoutine != null)
+        {
+            StopCoroutine(dodgeRoutine);
+            dodgeRoutine = null;
+        }
+
+        if (rb != null)
+        {
+            rb.linearVelocity = Vector2.zero;
+            if (resetPosition)
+            {
+                rb.position = Vector2.zero;
+            }
+        }
+        else if (resetPosition)
+        {
+            transform.position = Vector3.zero;
+        }
+
+        OnHpChanged?.Invoke(currentHP, maxHP);
+        Debug.Log("Player stats reset to full.");
+    }
+
+    public bool TakeDamage(int damage)
+    {
+        if (damage <= 0 || IsInvulnerable)
+        {
+            return false;
+        }
+
+        currentHP = Mathf.Max(0, currentHP - damage);
+        OnHpChanged?.Invoke(currentHP, maxHP);
+
+        if (currentHP <= 0)
+        {
+            Debug.Log("Player Died!");
+        }
+
+        return true;
+    }
+
+    public void PerformDodge(Vector2 requestedDirection)
+    {
+        Vector2 dodgeDirection = requestedDirection.sqrMagnitude > 0.001f ? requestedDirection.normalized : lastNonZeroDirection;
+        RememberDirection(dodgeDirection);
+
+        if (dodgeRoutine != null)
+        {
+            StopCoroutine(dodgeRoutine);
+        }
+
+        dodgeRoutine = StartCoroutine(DodgeRoutine(dodgeDirection));
+    }
+
+    private void ReadKeyboardFallback()
+    {
+        if (Keyboard.current == null)
+        {
+            return;
+        }
+
+        Vector2 keyboardInput = Vector2.zero;
+
+        if (Keyboard.current.aKey.isPressed || Keyboard.current.leftArrowKey.isPressed)
+        {
+            keyboardInput.x -= 1f;
+        }
+
+        if (Keyboard.current.dKey.isPressed || Keyboard.current.rightArrowKey.isPressed)
+        {
+            keyboardInput.x += 1f;
+        }
+
+        if (Keyboard.current.sKey.isPressed || Keyboard.current.downArrowKey.isPressed)
+        {
+            keyboardInput.y -= 1f;
+        }
+
+        if (Keyboard.current.wKey.isPressed || Keyboard.current.upArrowKey.isPressed)
+        {
+            keyboardInput.y += 1f;
+        }
+
+        if (keyboardInput.sqrMagnitude > 0.001f)
+        {
+            inputVector = Vector2.ClampMagnitude(keyboardInput, 1f);
+            actionInputActive = false;
+            RememberDirection(inputVector);
+        }
+        else if (!actionInputActive && inputVector.sqrMagnitude > 0.001f && NoKeyboardMovementKeysPressed())
+        {
+            inputVector = Vector2.zero;
+        }
+    }
+
+    private bool NoKeyboardMovementKeysPressed()
+    {
+        Keyboard keyboard = Keyboard.current;
+        return keyboard == null ||
+               (!keyboard.aKey.isPressed &&
+                !keyboard.dKey.isPressed &&
+                !keyboard.sKey.isPressed &&
+                !keyboard.wKey.isPressed &&
+                !keyboard.leftArrowKey.isPressed &&
+                !keyboard.rightArrowKey.isPressed &&
+                !keyboard.downArrowKey.isPressed &&
+                !keyboard.upArrowKey.isPressed);
+    }
+
+    private void RememberDirection(Vector2 direction)
+    {
+        if (direction.sqrMagnitude > 0.001f)
+        {
+            lastNonZeroDirection = direction.normalized;
+        }
+    }
+
+    private IEnumerator DodgeRoutine(Vector2 direction)
+    {
+        isDodging = true;
+        invulnerableUntil = Time.time + dodgeInvulnerability;
+
+        Vector2 start = rb.position;
+        Vector2 end = start + direction * dodgeDistance;
+        float elapsed = 0f;
+
+        while (elapsed < dodgeDuration)
+        {
+            float t = Mathf.Clamp01(elapsed / dodgeDuration);
+            float eased = 1f - Mathf.Pow(1f - t, 3f);
+            rb.MovePosition(Vector2.Lerp(start, end, eased));
+            elapsed += Time.fixedDeltaTime;
+            yield return new WaitForFixedUpdate();
+        }
+
+        rb.MovePosition(end);
+        rb.linearVelocity = Vector2.zero;
+        isDodging = false;
+        dodgeRoutine = null;
+    }
+
+    private void UpdateVisualState()
+    {
+        if (bodyRenderer != null)
+        {
+            bodyRenderer.color = IsInvulnerable ? invulnerableColor : bodyColor;
+        }
     }
 }
