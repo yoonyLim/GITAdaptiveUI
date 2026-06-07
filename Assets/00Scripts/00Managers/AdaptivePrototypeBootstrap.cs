@@ -8,6 +8,18 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
 {
     public bool buildOnAwake = true;
 
+    [Header("Startup Flow")]
+    public bool startGameOnPlay = true;
+    public bool runCalibrationBeforeGame;
+    public int gameStartStage = 1;
+
+    [Header("Calibration Counts")]
+    public int centerTapsPerButton = 8;
+    public int reciprocalAlternationPairs = 10;
+    public int boundaryTapsPerButton = 4;
+    public int ambiguousTapsPerButton = 4;
+    public int contextTapsPerState = 4;
+
     private void Awake()
     {
         if (!buildOnAwake || FindAnyObjectByType<RoguelikeGameManager>() != null)
@@ -33,22 +45,41 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         TextMeshProUGUI contextText = CreateText(canvas.transform, "Detailed Context Text", "Closest: None", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(370f, -224f), new Vector2(700f, 34f), 17, TextAlignmentOptions.Left);
         TextMeshProUGUI feedbackText = CreateText(canvas.transform, "Feedback Text", string.Empty, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 52f), new Vector2(700f, 42f), 22, TextAlignmentOptions.Center);
 
+        VirtualJoystick joystick = CreateVirtualJoystick(canvas.transform, player);
         Image attackImage = CreateActionButton(canvas.transform, "Attack Button", "Attack", new Vector2(1f, 0f), new Vector2(-160f, 150f), new Color(0.95f, 0.22f, 0.18f, 0.88f), out RectTransform attackHitbox);
         Image dodgeImage = CreateActionButton(canvas.transform, "Dodge Button", "Dodge", new Vector2(1f, 0f), new Vector2(-340f, 118f), new Color(0.12f, 0.58f, 1f, 0.88f), out RectTransform dodgeHitbox);
         Button skipButton = CreateSkipButton(canvas.transform);
 
         GameObject managerObject = new GameObject("Game Manager");
         CombatManager combatManager = managerObject.AddComponent<CombatManager>();
+        CombatActionPriorBuilder priorBuilder = managerObject.AddComponent<CombatActionPriorBuilder>();
         RoguelikeGameManager gameManager = managerObject.AddComponent<RoguelikeGameManager>();
+        ParticipantConfig participantConfig = managerObject.AddComponent<ParticipantConfig>();
+        ExperimentSessionManager sessionManager = managerObject.AddComponent<ExperimentSessionManager>();
+        ConditionManager conditionManager = managerObject.AddComponent<ConditionManager>();
+        TrialScenarioManager trialScenarioManager = managerObject.AddComponent<TrialScenarioManager>();
+        UserTouchModel userTouchModel = managerObject.AddComponent<UserTouchModel>();
+        BayesianInputDecoder decoder = managerObject.AddComponent<BayesianInputDecoder>();
+        SafetyGate safetyGate = managerObject.AddComponent<SafetyGate>();
+        RawTouchLogger rawTouchLogger = managerObject.AddComponent<RawTouchLogger>();
+        BayesianDecisionLogger decisionLogger = managerObject.AddComponent<BayesianDecisionLogger>();
+        ButtonLayoutLogger layoutLogger = managerObject.AddComponent<ButtonLayoutLogger>();
+        HPOutcomeLogger hpOutcomeLogger = managerObject.AddComponent<HPOutcomeLogger>();
+        ModePolicyLogger modePolicyLogger = managerObject.AddComponent<ModePolicyLogger>();
+        InteractionDemandModel demandModel = managerObject.AddComponent<InteractionDemandModel>();
+        AdaptiveUIPolicyEngine policyEngine = managerObject.AddComponent<AdaptiveUIPolicyEngine>();
         AdaptiveTouchManager touchManager = managerObject.AddComponent<AdaptiveTouchManager>();
 
         gameManager.playerTransform = player.transform;
         gameManager.playerController = player;
         gameManager.skipButton = skipButton;
         gameManager.stageText = stageText;
+        gameManager.startStageOnPlay = startGameOnPlay && !runCalibrationBeforeGame;
+        gameManager.startingStage = gameStartStage;
 
         combatManager.gameManager = gameManager;
         combatManager.playerController = player;
+        combatManager.priorBuilder = priorBuilder;
         combatManager.stateText = stateText;
         combatManager.playerHpText = playerHpText;
         combatManager.enemyHpText = enemyText;
@@ -56,11 +87,51 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         combatManager.priorText = priorText;
         combatManager.contextText = contextText;
 
+        sessionManager.participantConfig = participantConfig;
+        trialScenarioManager.sessionManager = sessionManager;
+        trialScenarioManager.conditionManager = conditionManager;
+        trialScenarioManager.centerTapsPerButton = centerTapsPerButton;
+        trialScenarioManager.reciprocalAlternationPairs = reciprocalAlternationPairs;
+        trialScenarioManager.boundaryTapsPerButton = boundaryTapsPerButton;
+        trialScenarioManager.ambiguousTapsPerButton = ambiguousTapsPerButton;
+        trialScenarioManager.contextTapsPerState = contextTapsPerState;
+        rawTouchLogger.sessionManager = sessionManager;
+        decisionLogger.sessionManager = sessionManager;
+        layoutLogger.sessionManager = sessionManager;
+        hpOutcomeLogger.sessionManager = sessionManager;
+        modePolicyLogger.sessionManager = sessionManager;
+        decoder.userTouchModel = userTouchModel;
+
         touchManager.mainCanvas = canvas;
         touchManager.visualAttackButton = attackImage;
         touchManager.visualDodgeButton = dodgeImage;
         touchManager.attackHitboxVisualizer = attackHitbox;
         touchManager.dodgeHitboxVisualizer = dodgeHitbox;
+        touchManager.ignoredInputRegions = joystick != null ? new[] { joystick.background } : null;
+        touchManager.decoder = decoder;
+        touchManager.safetyGate = safetyGate;
+        touchManager.userTouchModel = userTouchModel;
+        touchManager.sessionManager = sessionManager;
+        touchManager.trialScenarioManager = trialScenarioManager;
+        touchManager.conditionManager = conditionManager;
+        touchManager.rawTouchLogger = rawTouchLogger;
+        touchManager.decisionLogger = decisionLogger;
+        touchManager.layoutLogger = layoutLogger;
+        touchManager.hpOutcomeLogger = hpOutcomeLogger;
+        touchManager.modePolicyLogger = modePolicyLogger;
+        touchManager.demandModel = demandModel;
+        touchManager.policyEngine = policyEngine;
+
+        if (runCalibrationBeforeGame)
+        {
+            KTHCalibrationGameFlow flow = managerObject.AddComponent<KTHCalibrationGameFlow>();
+            flow.gameManager = gameManager;
+            flow.trialScenarioManager = trialScenarioManager;
+            flow.sessionManager = sessionManager;
+            flow.userTouchModel = userTouchModel;
+            flow.stageText = stageText;
+            flow.gameStartStage = gameStartStage;
+        }
     }
 
     private void CreateCameraIfNeeded()
@@ -151,6 +222,36 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         TextMeshProUGUI text = CreateText(buttonTransform, label + " Text", label, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(140f, 44f), 24, TextAlignmentOptions.Center);
         text.color = Color.white;
         return image;
+    }
+
+    private VirtualJoystick CreateVirtualJoystick(Transform parent, PlayerController player)
+    {
+        RectTransform background = CreateRectTransform("Movement Joystick", parent, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(190f, 160f), new Vector2(230f, 230f));
+        Image backgroundImage = background.gameObject.AddComponent<Image>();
+        backgroundImage.sprite = PrototypeVisualFactory.CircleSprite;
+        backgroundImage.color = new Color(0.08f, 0.14f, 0.16f, 0.62f);
+        backgroundImage.raycastTarget = true;
+
+        RectTransform guide = CreateRectTransform("Movement Joystick Guide", background, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(154f, 154f));
+        Image guideImage = guide.gameObject.AddComponent<Image>();
+        guideImage.sprite = PrototypeVisualFactory.CircleSprite;
+        guideImage.color = new Color(0.45f, 0.8f, 0.88f, 0.22f);
+        guideImage.raycastTarget = false;
+
+        RectTransform handle = CreateRectTransform("Movement Joystick Handle", background, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(74f, 74f));
+        Image handleImage = handle.gameObject.AddComponent<Image>();
+        handleImage.sprite = PrototypeVisualFactory.CircleSprite;
+        handleImage.color = new Color(0.85f, 0.95f, 1f, 0.9f);
+        handleImage.raycastTarget = false;
+
+        VirtualJoystick joystick = background.gameObject.AddComponent<VirtualJoystick>();
+        joystick.playerController = player;
+        joystick.background = background;
+        joystick.handle = handle;
+        joystick.canvas = parent.GetComponentInParent<Canvas>();
+        joystick.radius = 78f;
+        joystick.deadZone = 0.12f;
+        return joystick;
     }
 
     private Button CreateSkipButton(Transform parent)

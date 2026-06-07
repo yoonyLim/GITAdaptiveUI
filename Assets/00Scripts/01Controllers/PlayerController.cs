@@ -32,6 +32,7 @@ public class PlayerController : MonoBehaviour
     private int currentHP;
     private bool isDodging;
     private bool actionInputActive;
+    private bool virtualMoveActive;
     private float invulnerableUntil;
     private Coroutine dodgeRoutine;
 
@@ -98,6 +99,26 @@ public class PlayerController : MonoBehaviour
         else if (context.phase == InputActionPhase.Canceled)
         {
             actionInputActive = false;
+            if (!virtualMoveActive)
+            {
+                inputVector = Vector2.zero;
+            }
+        }
+    }
+
+    public void SetVirtualMoveInput(Vector2 moveInput)
+    {
+        inputVector = Vector2.ClampMagnitude(moveInput, 1f);
+        virtualMoveActive = inputVector.sqrMagnitude > 0.001f;
+        actionInputActive = false;
+        RememberDirection(inputVector);
+    }
+
+    public void ClearVirtualMoveInput()
+    {
+        virtualMoveActive = false;
+        if (!actionInputActive)
+        {
             inputVector = Vector2.zero;
         }
     }
@@ -112,6 +133,7 @@ public class PlayerController : MonoBehaviour
         currentHP = maxHP;
         inputVector = Vector2.zero;
         actionInputActive = false;
+        virtualMoveActive = false;
         invulnerableUntil = 0f;
         isDodging = false;
 
@@ -202,9 +224,10 @@ public class PlayerController : MonoBehaviour
         {
             inputVector = Vector2.ClampMagnitude(keyboardInput, 1f);
             actionInputActive = false;
+            virtualMoveActive = false;
             RememberDirection(inputVector);
         }
-        else if (!actionInputActive && inputVector.sqrMagnitude > 0.001f && NoKeyboardMovementKeysPressed())
+        else if (!virtualMoveActive && !actionInputActive && inputVector.sqrMagnitude > 0.001f && NoKeyboardMovementKeysPressed())
         {
             inputVector = Vector2.zero;
         }

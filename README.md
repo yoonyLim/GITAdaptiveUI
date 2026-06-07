@@ -144,6 +144,113 @@ The exported config is written to:
 - `analysis_multigame_scene/outputs/models/mode_policy_prior_config.json`
 - `Assets/StreamingAssets/ADUI/mode_policy_prior_config.json`
 
+## D2E Action Prior + N-Button Bayesian Decoder
+
+`analysis_d2e` is the current pipeline for the D2E-480p direction. It uses D2E frames plus raw keyboard/mouse input to learn `P(action | environment)`, then projects the atomic action distribution into N-button priors for the mobile decoder.
+
+Important scope:
+
+- D2E-480p is for environment action prior learning, not mobile touch-skill learning.
+- `touch_profile` and `skill_profile` are assumed to come from the mobile client.
+- The context button is a dynamic helper slot with a visible label, not a fixed ground-truth class.
+- Clear touch input is preserved even when the situation prior favors another button.
+
+Place real D2E-480p manifests/frames under:
+
+```bash
+analysis_d2e/data/raw/d2e_480p/
+```
+
+or set:
+
+```bash
+D2E_480P_ROOT=<path_to_D2E_480p>
+```
+
+Download a small Hugging Face subset:
+
+```bash
+uv run --with huggingface_hub python -m analysis_d2e.src.download_d2e_subset --games Barony Brotato Skul Core_Keeper Vampire_Survivors --max-recordings-per-game 1 --dry-run
+uv run --with huggingface_hub python -m analysis_d2e.src.download_d2e_subset --games Barony Brotato Skul Core_Keeper Vampire_Survivors --max-recordings-per-game 5 --max-file-mb 800
+```
+
+Run real D2E processing:
+
+```bash
+uv run --with pillow --with mcap-owa-support --with owa-msgs python -m analysis_d2e.src.d2e_preprocess --root .\analysis_d2e\data\raw\d2e_480p --history-len 8 --max-samples-per-mcap 400 --frame-stride 30
+uv run --with pillow python -m analysis_d2e.src.d2e_action_prior_model --min-label-confidence 0.2
+uv run --with pillow python -m analysis_d2e.src.evaluate
+uv run --with pillow python -m analysis_d2e.src.audit_outputs
+uv run python -m analysis_d2e.src.report_builder
+```
+
+The current local subset includes usable Barony, Brotato, Core Keeper, and Vampire Survivors frames. Skul currently has only the `.mcap` under the default 800 MB cap because the paired video is larger, so it is tracked as attempted but not processed.
+
+Run one mobile-client-style decode request:
+
+```bash
+uv run --with pillow python -m analysis_d2e.src.runtime_decode --request request.json
+```
+
+Runtime JSON schema and safety rules are documented in `docs/d2e_mobile_client_runtime_integration_ko.md`.
+
+Primary subset and phase coverage audits are written to:
+
+```bash
+analysis_d2e/outputs/reports/d2e_primary_subset_audit.csv
+analysis_d2e/outputs/reports/d2e_phase_coverage_audit.csv
+analysis_d2e/outputs/reports/d2e_runtime_example_request.json
+analysis_d2e/outputs/reports/d2e_runtime_example_response.json
+```
+
+Run the labeled smoke fixture only for pipeline testing:
+
+```bash
+make d2e-smoke
+```
+
+The report is written to `analysis_d2e/outputs/reports/final_d2e_bayesian_decoder_report_ko.md`.
+
+`phase_1/2/3` labels are not native D2E labels. The D2E pipeline records `phase_source`; values other than `provided` are weak proxies and should not be reported as direct phase ground truth.
+
+### Core Keeper offense/explicit-defense pipeline
+
+The narrower follow-up pipeline treats D2E-Core Keeper as the primary real-screen subset and avoids claiming that D2E directly provides `melee/ranged/aoe/defense` labels. It first builds 2-key event clips with four labels:
+
+- `offense`
+- `explicit_defense`
+- `movement_only`
+- `unknown_ignore`
+
+Run:
+
+```bash
+make d2e-core-pipeline
+```
+
+Equivalent commands:
+
+```bash
+uv run --with pillow python -m analysis_d2e.src.build_core_keeper_event_clips
+uv run --with pillow python -m analysis_d2e.src.train_offense_defense_prior --min-confidence 0.5
+uv run --with pillow python -m analysis_d2e.src.build_threat_auxiliary
+uv run --with pillow python -m analysis_d2e.src.synthetic_state_validation
+uv run --with pillow python -m analysis_d2e.src.core_keeper_pipeline_report
+```
+
+Outputs:
+
+```bash
+analysis_d2e/data/processed/core_keeper_2key_event_clips.jsonl
+analysis_d2e/outputs/reports/core_keeper_2key_clip_summary.csv
+analysis_d2e/outputs/reports/core_keeper_offense_defense_metrics.csv
+analysis_d2e/outputs/reports/threat_state_auxiliary_summary.csv
+analysis_d2e/outputs/reports/synthetic_state_ablation.csv
+analysis_d2e/outputs/reports/final_core_keeper_offense_defense_pipeline_ko.md
+```
+
+Brotato and Vampire Survivors are used only as threat/state auxiliary data for enemy density and visual threat proxies, not as action-label data. Procgen/Craftax rows are clean synthetic validation fixtures and must not be reported as real D2E performance.
+
 ## Unity Analysis
 
 For a smoke fixture:
@@ -184,6 +291,7 @@ Makefile targets are also available:
 ```bash
 make public-download public-preprocess public-evaluate public-config
 make multigame-generate multigame-train multigame-evaluate
+make d2e-smoke d2e-preprocess d2e-train d2e-evaluate d2e-report
 make discover-scenes acquire-scenes teacher-label teacher-latency student-train student-latency async-runtime unity-teacher-student-eval
 make unity-ingest unity-train unity-evaluate compare report test
 ```

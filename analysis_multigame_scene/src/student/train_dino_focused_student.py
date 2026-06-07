@@ -12,7 +12,6 @@ from analysis_multigame_scene.src.common import (
     REPORTS_DIR,
     REPO_ROOT,
     clamp01,
-    load_student_training_rows,
     safe_float,
     write_csv,
     write_json,
@@ -24,6 +23,8 @@ from analysis_multigame_scene.src.student.train_focused_student import (
     focused_action_window,
     focused_prior_direction,
     focused_risk_state,
+    focused_temporal_urgency,
+    load_focused_training_rows,
 )
 
 
@@ -126,7 +127,7 @@ class FeatureDataset:
             }
             for target, value in target_values.items():
                 ys[target].append(class_to_idx[target].get(value, class_to_idx[target][FOCUSED_TARGET_CLASSES[target][-1]]))
-            urgency.append(clamp01(label.get("interaction_demand", {}).get("temporal_urgency", 0.0)))
+            urgency.append(focused_temporal_urgency(label))
         return (
             torch.stack(xs, dim=0) if xs else torch.empty((0, 1)),
             {target: torch.tensor(values, dtype=torch.long) for target, values in ys.items()},
@@ -304,7 +305,7 @@ def evaluate_head(
         pred = predict_head(net, feature, torch, functional)
         true_risk = focused_risk_state(label)
         true_action = focused_action_window(label)
-        true_urgency = clamp01(label.get("interaction_demand", {}).get("temporal_urgency", 0.0))
+        true_urgency = focused_temporal_urgency(label)
         true_prior = focused_prior_direction(true_risk, true_action, true_urgency)
         for target, y, p in [
             ("risk_state", true_risk, str(pred["risk_state"])),
@@ -403,7 +404,7 @@ def main() -> None:
     parser.add_argument("--local-files-only", action="store_true")
     args = parser.parse_args()
 
-    _train_rows, by_id, split_rows = load_student_training_rows()
+    _train_rows, by_id, split_rows = load_focused_training_rows()
     all_rows = split_rows["train"] + split_rows.get("valid", []) + split_rows.get("test", [])
     try:
         features, sample_ids, feature_dim, model_name = extract_features(

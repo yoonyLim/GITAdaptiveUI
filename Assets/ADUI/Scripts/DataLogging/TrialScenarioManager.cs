@@ -10,6 +10,14 @@ public class TrialScenarioManager : MonoBehaviour
     public int calibrationTapsPerButton = 30;
     public int mainTrialCount = 240;
 
+    [Header("Calibration Protocol")]
+    public int centerTapsPerButton = 8;
+    public int reciprocalAlternationPairs = 10;
+    public int boundaryTapsPerButton = 4;
+    public int ambiguousTapsPerButton = 4;
+    public int contextTapsPerState = 4;
+    public bool shuffleDiscreteCenterTaps = true;
+
     public int currentTrialId;
     public int currentBlockId;
     public string currentPhase = DatasetSchema.PhaseFreeplay;
@@ -18,8 +26,14 @@ public class TrialScenarioManager : MonoBehaviour
     public string currentLabelSource = "unavailable";
     public string currentTrialType = "";
     public long currentTrialStartMs;
+    public string currentInstruction = "";
+    public bool currentCalibrationUsedForTouchModel;
+    public ADUIEnemyState currentCalibrationEnemyState = ADUIEnemyState.Safe;
+    public int calibrationTotalCount;
 
-    private readonly List<string> calibrationQueue = new List<string>();
+    public int CalibrationRemainingCount => calibrationQueue.Count;
+
+    private readonly List<CalibrationTrial> calibrationQueue = new List<CalibrationTrial>();
     private readonly string[] scenarioCycle = { "Safe", "Telegraph", "Attacking", "Neutral" };
     private readonly string[] trialTypeCycle =
     {
@@ -34,15 +48,24 @@ public class TrialScenarioManager : MonoBehaviour
 
     public void StartCalibration()
     {
+        UserTouchModel touchModel = FindAnyObjectByType<UserTouchModel>();
+        if (touchModel != null)
+        {
+            touchModel.ResetCalibration();
+        }
+
+        if (conditionManager != null)
+        {
+            conditionManager.randomizeConditionOrder = false;
+            conditionManager.SetCondition(DatasetSchema.ConditionContextBayesianSafety);
+        }
+
         currentPhase = DatasetSchema.PhaseCalibration;
         calibrationQueue.Clear();
-        for (var i = 0; i < calibrationTapsPerButton; i++)
-        {
-            calibrationQueue.Add("Attack");
-            calibrationQueue.Add("Dodge");
-        }
-        Shuffle(calibrationQueue, 13);
+        BuildCalibrationQueue();
+        calibrationTotalCount = calibrationQueue.Count;
         currentTrialId = 0;
+        currentBlockId = 0;
         BeginNextCalibrationTrial();
     }
 
@@ -64,15 +87,22 @@ public class TrialScenarioManager : MonoBehaviour
         if (calibrationQueue.Count == 0)
         {
             currentPhase = DatasetSchema.PhaseFreeplay;
+            currentInstruction = "Calibration complete.";
+            currentCalibrationUsedForTouchModel = false;
             return;
         }
         currentTrialId += 1;
         currentTrialStartMs = NowMs();
-        currentIntendedAction = calibrationQueue[0];
+        CalibrationTrial trial = calibrationQueue[0];
         calibrationQueue.RemoveAt(0);
+        currentIntendedAction = trial.intendedAction;
         currentRequiredAction = currentIntendedAction;
-        currentLabelSource = "calibration_instruction";
-        currentTrialType = "calibration_tap";
+        currentLabelSource = trial.labelSource;
+        currentTrialType = trial.trialType;
+        currentInstruction = trial.instruction;
+        currentBlockId = trial.blockId;
+        currentCalibrationUsedForTouchModel = trial.useForTouchModel;
+        currentCalibrationEnemyState = trial.enemyState;
     }
 
     public void BeginNextMainTrial()
@@ -90,6 +120,11 @@ public class TrialScenarioManager : MonoBehaviour
 
     public ADUIEnemyState CurrentEnemyState()
     {
+        if (currentPhase == DatasetSchema.PhaseCalibration)
+        {
+            return currentCalibrationEnemyState;
+        }
+
         if (CombatManager.Instance)
         {
             switch (CombatManager.Instance.currentState)
@@ -117,7 +152,152 @@ public class TrialScenarioManager : MonoBehaviour
         else if (currentPhase == DatasetSchema.PhaseTest && currentTrialId < mainTrialCount) BeginNextMainTrial();
     }
 
-    private void Shuffle(List<string> values, int seed)
+    public bool ShouldUseCurrentCalibrationTrialForTouchModel()
+    {
+        return currentPhase == DatasetSchema.PhaseCalibration && currentCalibrationUsedForTouchModel;
+    }
+
+    private void BuildCalibrationQueue()
+    {
+        var centerTrials = new List<CalibrationTrial>();
+        for (int i = 0; i < Mathf.Max(1, centerTapsPerButton); i++)
+        {
+            centerTrials.Add(NewCalibrationTrial(
+                "Attack",
+                "discrete_center_attack",
+                ADUIEnemyState.Safe,
+                "Tap the center of Attack.",
+                true,
+                0,
+                "calibration_fit_discrete"));
+            centerTrials.Add(NewCalibrationTrial(
+                "Dodge",
+                "discrete_center_dodge",
+                ADUIEnemyState.Safe,
+                "Tap the center of Dodge.",
+                true,
+                0,
+                "calibration_fit_discrete"));
+        }
+
+        if (shuffleDiscreteCenterTaps)
+        {
+            Shuffle(centerTrials, 31);
+        }
+
+        calibrationQueue.AddRange(centerTrials);
+
+        for (int i = 0; i < Mathf.Max(1, reciprocalAlternationPairs); i++)
+        {
+            calibrationQueue.Add(NewCalibrationTrial(
+                "Attack",
+                "reciprocal_alternating_attack",
+                ADUIEnemyState.Safe,
+                "Alternate quickly: tap Attack.",
+                true,
+                1,
+                "calibration_fit_reciprocal"));
+            calibrationQueue.Add(NewCalibrationTrial(
+                "Dodge",
+                "reciprocal_alternating_dodge",
+                ADUIEnemyState.Safe,
+                "Alternate quickly: tap Dodge.",
+                true,
+                1,
+                "calibration_fit_reciprocal"));
+        }
+
+        for (int i = 0; i < Mathf.Max(1, boundaryTapsPerButton); i++)
+        {
+            calibrationQueue.Add(NewCalibrationTrial(
+                "Attack",
+                "near_boundary_attack",
+                ADUIEnemyState.Safe,
+                "Aim for Attack near the inner edge between the buttons.",
+                false,
+                2,
+                "calibration_diagnostic_boundary"));
+            calibrationQueue.Add(NewCalibrationTrial(
+                "Dodge",
+                "near_boundary_dodge",
+                ADUIEnemyState.Safe,
+                "Aim for Dodge near the inner edge between the buttons.",
+                false,
+                2,
+                "calibration_diagnostic_boundary"));
+        }
+
+        for (int i = 0; i < Mathf.Max(1, ambiguousTapsPerButton); i++)
+        {
+            calibrationQueue.Add(NewCalibrationTrial(
+                "Attack",
+                "ambiguous_gap_attack",
+                ADUIEnemyState.Safe,
+                "Aim for Attack from the gap between Attack and Dodge.",
+                false,
+                3,
+                "calibration_diagnostic_ambiguity"));
+            calibrationQueue.Add(NewCalibrationTrial(
+                "Dodge",
+                "ambiguous_gap_dodge",
+                ADUIEnemyState.Telegraph,
+                "Aim for Dodge from the gap between Attack and Dodge.",
+                false,
+                3,
+                "calibration_diagnostic_ambiguity"));
+        }
+
+        for (int i = 0; i < Mathf.Max(1, contextTapsPerState); i++)
+        {
+            calibrationQueue.Add(NewCalibrationTrial(
+                "Attack",
+                "context_safe_attack",
+                ADUIEnemyState.Safe,
+                "Safe context: tap Attack.",
+                true,
+                4,
+                "calibration_fit_context"));
+            calibrationQueue.Add(NewCalibrationTrial(
+                "Dodge",
+                "context_telegraph_dodge",
+                ADUIEnemyState.Telegraph,
+                "Telegraph context: tap Dodge.",
+                true,
+                4,
+                "calibration_fit_context"));
+            calibrationQueue.Add(NewCalibrationTrial(
+                "Dodge",
+                "context_attacking_dodge",
+                ADUIEnemyState.Attacking,
+                "Incoming attack context: tap Dodge.",
+                true,
+                4,
+                "calibration_fit_context"));
+        }
+    }
+
+    private CalibrationTrial NewCalibrationTrial(
+        string intendedAction,
+        string trialType,
+        ADUIEnemyState enemyState,
+        string instruction,
+        bool useForTouchModel,
+        int blockId,
+        string labelSource)
+    {
+        return new CalibrationTrial
+        {
+            intendedAction = intendedAction,
+            trialType = trialType,
+            enemyState = enemyState,
+            instruction = instruction,
+            useForTouchModel = useForTouchModel,
+            blockId = blockId,
+            labelSource = labelSource
+        };
+    }
+
+    private void Shuffle(List<CalibrationTrial> values, int seed)
     {
         var rng = new System.Random(seed);
         for (var i = values.Count - 1; i > 0; i--)
@@ -132,6 +312,17 @@ public class TrialScenarioManager : MonoBehaviour
     private long NowMs()
     {
         return System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    }
+
+    private struct CalibrationTrial
+    {
+        public string intendedAction;
+        public string trialType;
+        public ADUIEnemyState enemyState;
+        public string instruction;
+        public bool useForTouchModel;
+        public int blockId;
+        public string labelSource;
     }
 }
 

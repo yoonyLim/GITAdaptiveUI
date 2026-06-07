@@ -82,6 +82,9 @@ public class ADUITrialRecord
     public string required_action = "";
     public string intended_action = "";
     public string label_source = "";
+    public string trial_type = "";
+    public string calibration_instruction = "";
+    public bool calibration_used_for_touch_model;
 
     public float touch_x;
     public float touch_y;
@@ -94,6 +97,11 @@ public class ADUITrialRecord
     public float relative_attack_y;
     public float relative_dodge_x;
     public float relative_dodge_y;
+    public float intended_center_x;
+    public float intended_center_y;
+    public float distance_to_intended;
+    public float relative_intended_x;
+    public float relative_intended_y;
     public bool is_inside_attack_visual;
     public bool is_inside_dodge_visual;
     public bool is_inside_attack_expanded;

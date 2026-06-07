@@ -1,8 +1,9 @@
 PY=uv run --with pyarrow --with matplotlib
 MULTIGAME_PY=uv run --with pyarrow --with matplotlib --with vizdoom
 PYTEST=uv run --with pytest --with matplotlib --with pyarrow
+D2E_PY=uv run --with pillow
 
-.PHONY: multigame-generate multigame-train multigame-evaluate discover-scenes acquire-scenes acquire-moba-scenes acquire-dota2-event acquire-hokoff acquire-extra-screen-scenes teacher-label teacher-label-real teacher-label-real-screen-100 teacher-label-real-screen-200 teacher-latency student-train student-latency async-runtime unity-teacher-student-eval public-download public-inspect public-preprocess public-evaluate public-config vision-download vision-build vision-inspect unity-ingest unity-train unity-evaluate compare report test all
+.PHONY: multigame-generate multigame-train multigame-evaluate d2e-fixture d2e-download d2e-preprocess d2e-train d2e-evaluate d2e-audit d2e-report d2e-core-clips d2e-core-train d2e-threat-aux d2e-synthetic-state d2e-core-report d2e-core-pipeline d2e-smoke discover-scenes acquire-scenes acquire-moba-scenes acquire-dota2-event acquire-hokoff acquire-extra-screen-scenes teacher-label teacher-label-real teacher-label-real-screen-100 teacher-label-real-screen-200 teacher-latency student-train student-latency async-runtime unity-teacher-student-eval public-download public-inspect public-preprocess public-evaluate public-config vision-download vision-build vision-inspect unity-ingest unity-train unity-evaluate compare report test all
 
 multigame-generate:
 	$(MULTIGAME_PY) python -m analysis_multigame.src.data.generate_vizdoom_dataset --mode small
@@ -21,6 +22,51 @@ multigame-evaluate:
 	$(MULTIGAME_PY) python -m analysis_multigame.src.evaluation.evaluate_cross_game_generalization
 	$(MULTIGAME_PY) python -m analysis_multigame.src.models.prior_builder
 	$(MULTIGAME_PY) python -m analysis_multigame.src.evaluation.report_builder
+
+d2e-fixture:
+	$(D2E_PY) python -m analysis_d2e.src.generate_smoke_fixture --rows-per-game-phase 8
+
+d2e-download:
+	uv run --with huggingface_hub python -m analysis_d2e.src.download_d2e_subset --games Barony Brotato Skul Core_Keeper Vampire_Survivors --max-recordings-per-game 5 --max-file-mb 800
+
+d2e-preprocess:
+	uv run --with pillow --with mcap-owa-support --with owa-msgs python -m analysis_d2e.src.d2e_preprocess --root .\analysis_d2e\data\raw\d2e_480p --history-len 8 --max-samples-per-mcap 400 --frame-stride 30
+
+d2e-train:
+	$(D2E_PY) python -m analysis_d2e.src.d2e_action_prior_model --min-label-confidence 0.2
+
+d2e-evaluate:
+	$(D2E_PY) python -m analysis_d2e.src.evaluate
+
+d2e-audit:
+	$(D2E_PY) python -m analysis_d2e.src.audit_outputs
+
+d2e-report:
+	uv run python -m analysis_d2e.src.report_builder
+
+d2e-core-clips:
+	$(D2E_PY) python -m analysis_d2e.src.build_core_keeper_event_clips
+
+d2e-core-train:
+	$(D2E_PY) python -m analysis_d2e.src.train_offense_defense_prior --min-confidence 0.5
+
+d2e-threat-aux:
+	$(D2E_PY) python -m analysis_d2e.src.build_threat_auxiliary
+
+d2e-synthetic-state:
+	$(D2E_PY) python -m analysis_d2e.src.synthetic_state_validation
+
+d2e-core-report:
+	$(D2E_PY) python -m analysis_d2e.src.core_keeper_pipeline_report
+
+d2e-core-pipeline: d2e-core-clips d2e-core-train d2e-threat-aux d2e-synthetic-state d2e-core-report
+
+d2e-smoke: d2e-fixture
+	$(D2E_PY) python -m analysis_d2e.src.d2e_preprocess --root .\analysis_d2e\data\fixtures\d2e_smoke
+	$(D2E_PY) python -m analysis_d2e.src.d2e_action_prior_model
+	$(D2E_PY) python -m analysis_d2e.src.evaluate
+	$(D2E_PY) python -m analysis_d2e.src.audit_outputs
+	uv run python -m analysis_d2e.src.report_builder
 
 discover-scenes:
 	$(PY) python -m analysis_multigame_scene.src.data.discover_game_scene_datasets
@@ -136,8 +182,9 @@ compare:
 report:
 	$(PY) python -m analysis_unity.src.report_builder
 	$(PY) python -m analysis_multigame_scene.src.reports.build_report
+	uv run python -m analysis_d2e.src.report_builder
 
 test:
 	$(PYTEST) pytest -p no:cacheprovider
 
-all: multigame-generate multigame-train multigame-evaluate discover-scenes acquire-scenes teacher-label teacher-latency student-train student-latency async-runtime public-download public-preprocess public-evaluate public-config vision-download vision-build vision-inspect unity-ingest unity-train unity-evaluate unity-teacher-student-eval compare report test
+all: multigame-generate multigame-train multigame-evaluate d2e-preprocess d2e-train d2e-evaluate d2e-audit d2e-report discover-scenes acquire-scenes teacher-label teacher-latency student-train student-latency async-runtime public-download public-preprocess public-evaluate public-config vision-download vision-build vision-inspect unity-ingest unity-train unity-evaluate unity-teacher-student-eval compare report test

@@ -14,8 +14,11 @@ from analysis_multigame_scene.src.common import (
     clamp01,
     load_scene_samples,
     load_student_training_rows,
+    read_jsonl,
     safe_float,
+    split_by_scenario,
     student_image_tensor,
+    TEACHER_LABELS_DIR,
     write_csv,
     write_json,
 )
@@ -30,6 +33,8 @@ FOCUSED_MODEL_DIR = MODELS_DIR / "focused_student"
 
 
 def focused_risk_state(label: dict[str, Any]) -> str:
+    if label.get("risk_state"):
+        return str(label.get("risk_state"))
     threat = str(label.get("threat_level", "unknown"))
     if threat in {"none", "warning"}:
         return "safe_or_warning"
@@ -39,10 +44,18 @@ def focused_risk_state(label: dict[str, Any]) -> str:
 
 
 def focused_action_window(label: dict[str, Any]) -> str:
+    if label.get("action_window_prior"):
+        return str(label.get("action_window_prior"))
     action_window = str(label.get("action_window", "unknown"))
     if action_window in {"engage", "avoid"}:
         return action_window
     return "neutral"
+
+
+def focused_temporal_urgency(label: dict[str, Any]) -> float:
+    if "temporal_urgency" in label:
+        return clamp01(label.get("temporal_urgency", 0.0))
+    return clamp01(label.get("interaction_demand", {}).get("temporal_urgency", 0.0))
 
 
 def focused_prior_direction(risk_state: str, action_window: str, urgency: float) -> str:
@@ -51,6 +64,15 @@ def focused_prior_direction(risk_state: str, action_window: str, urgency: float)
     if action_window == "engage" and risk_state in {"safe_or_warning", "active"} and urgency < 0.85:
         return "attack_prior"
     return "neutral_prior"
+
+
+def load_focused_training_rows() -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, list[dict[str, Any]]]]:
+    labels = read_jsonl(TEACHER_LABELS_DIR / "focused_training_labels.jsonl")
+    if not labels:
+        return load_student_training_rows()
+    by_id = {str(label.get("sample_id")): label for label in labels if label.get("should_use_for_training", True)}
+    train_rows = [sample for sample in load_scene_samples() if str(sample.get("sample_id")) in by_id]
+    return train_rows, by_id, split_by_scenario(train_rows)
 
 
 def import_stack() -> tuple[Any, Any, Any, Any, Any]:
@@ -148,7 +170,7 @@ def make_focused_batch(rows: list[dict[str, Any]], by_id: dict[str, dict[str, An
         }
         for target, value in targets.items():
             ys[target].append(class_to_idx[target].get(value, class_to_idx[target][FOCUSED_TARGET_CLASSES[target][-1]]))
-        urgency_values.append(clamp01(label.get("interaction_demand", {}).get("temporal_urgency", 0.0)))
+        urgency_values.append(focused_temporal_urgency(label))
     return (
         torch.stack(xs, dim=0),
         {target: torch.tensor(values, dtype=torch.long) for target, values in ys.items()},
@@ -294,7 +316,7 @@ def evaluate_focused_candidate(
         pred = predict_focused(net, sample, torch, functional, Image)
         true_risk = focused_risk_state(label)
         true_action = focused_action_window(label)
-        true_urgency = clamp01(label.get("interaction_demand", {}).get("temporal_urgency", 0.0))
+        true_urgency = focused_temporal_urgency(label)
         true_prior_direction = focused_prior_direction(true_risk, true_action, true_urgency)
         for target, y, p in [
             ("risk_state", true_risk, str(pred["risk_state"])),
@@ -415,7 +437,7 @@ def write_focused_report(rows: list[dict[str, Any]]) -> None:
 
 
 def main() -> None:
-    _train_rows, by_id, split_rows = load_student_training_rows()
+    _train_rows, by_id, split_rows = load_focused_training_rows()
     candidates = ["mobilenet_v3_small", "shufflenet_v2_x1_0", "resnet18"]
     rows = []
     for name in candidates:

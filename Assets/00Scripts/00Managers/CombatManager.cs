@@ -9,6 +9,7 @@ public class CombatManager : MonoBehaviour
     [Header("Prototype References")]
     public RoguelikeGameManager gameManager;
     public PlayerController playerController;
+    public CombatActionPriorBuilder priorBuilder;
 
     [Header("UI Text Elements")]
     public TextMeshProUGUI stateText;
@@ -25,6 +26,9 @@ public class CombatManager : MonoBehaviour
     public float projectileNearRadius = 0.95f;
     public float projectileLookAheadSeconds = 0.75f;
 
+    [Header("SampleScene Compatibility")]
+    public bool useLegacyStatePriorFallback = true;
+
     public enum CombatState
     {
         Safe,
@@ -38,8 +42,10 @@ public class CombatManager : MonoBehaviour
     [HideInInspector] public float priorDodge = 0.5f;
 
     public CombatContext CurrentContext { get; private set; }
+    public CombatActionPriorResult CurrentPriorResult { get; private set; }
 
     private float feedbackClearTime;
+    private SimulatedEnemy legacyStateEnemy;
 
     public struct CombatContext
     {
@@ -88,6 +94,12 @@ public class CombatManager : MonoBehaviour
 
         if (playerController == null)
         {
+            if (IsLegacyStatePriorActive())
+            {
+                ReportFeedback("Attack accepted (SampleScene state prototype).", Color.green);
+                return;
+            }
+
             ReportFeedback("No player found.", Color.red);
             return;
         }
@@ -113,6 +125,12 @@ public class CombatManager : MonoBehaviour
 
         if (playerController == null)
         {
+            if (IsLegacyStatePriorActive())
+            {
+                ReportFeedback("Dodge accepted (SampleScene state prototype).", Color.cyan);
+                return;
+            }
+
             ReportFeedback("No player found.", Color.red);
             return;
         }
@@ -155,8 +173,6 @@ public class CombatManager : MonoBehaviour
             closestEnemyName = "None"
         };
 
-        float attackScore = baseAttackScore;
-        float dodgeScore = baseDodgeScore;
         float playerAttackRange = playerController != null ? playerController.attackRange : 2f;
 
         if (gameManager != null)
@@ -170,12 +186,12 @@ public class CombatManager : MonoBehaviour
                     continue;
                 }
 
-                AddEnemyToContext(enemy, ref context, ref attackScore, ref dodgeScore, playerAttackRange);
+                AddEnemyToContext(enemy, ref context);
             }
         }
         else
         {
-            EnemyControllerBase[] enemies = FindObjectsByType<EnemyControllerBase>();
+            EnemyControllerBase[] enemies = FindObjectsByType<EnemyControllerBase>(FindObjectsSortMode.None);
             for (int i = 0; i < enemies.Length; i++)
             {
                 EnemyControllerBase enemy = enemies[i];
@@ -184,60 +200,27 @@ public class CombatManager : MonoBehaviour
                     continue;
                 }
 
-                AddEnemyToContext(enemy, ref context, ref attackScore, ref dodgeScore, playerAttackRange);
+                AddEnemyToContext(enemy, ref context);
             }
         }
 
         context.incomingProjectiles = CountIncomingProjectiles();
-        dodgeScore += context.incomingProjectiles * 2.45f;
-
-        if (context.closeEnemies >= 4)
-        {
-            dodgeScore += 1.25f;
-        }
-
-        if (context.closeEnemies >= 8)
-        {
-            dodgeScore += 0.85f;
-        }
-
-        if (playerController != null && playerController.CurrentHP <= playerController.maxHP * 0.35f)
-        {
-            dodgeScore += 0.75f;
-        }
-
-        if (context.totalEnemies == 0)
-        {
-            attackScore = 0.5f;
-            dodgeScore = 0.5f;
-        }
-
-        float totalScore = Mathf.Max(0.001f, attackScore + dodgeScore);
-        priorAttack = Mathf.Clamp(attackScore / totalScore, 0.05f, 0.95f);
-        priorDodge = 1f - priorAttack;
-
-        if (context.attackingEnemies > 0 || context.incomingProjectiles > 0)
-        {
-            currentState = CombatState.Attacking;
-        }
-        else if (context.telegraphingEnemies > 0 || priorDodge >= 0.62f)
-        {
-            currentState = CombatState.Telegraph;
-        }
-        else
-        {
-            currentState = CombatState.Safe;
-        }
 
         CurrentContext = context;
+        bool useStateFallback = ShouldUseLegacyStatePriorFallback(context);
+        CurrentPriorResult = useStateFallback
+            ? ResolvePriorBuilder().BuildStatePrior(currentState)
+            : ResolvePriorBuilder().Build(context, playerController, playerAttackRange);
+        priorAttack = CurrentPriorResult.attackPrior;
+        priorDodge = CurrentPriorResult.dodgePrior;
+
+        if (!useStateFallback)
+        {
+            currentState = MapEnemyState(CurrentPriorResult.enemyState);
+        }
     }
 
-    private void AddEnemyToContext(
-        EnemyControllerBase enemy,
-        ref CombatContext context,
-        ref float attackScore,
-        ref float dodgeScore,
-        float playerAttackRange)
+    private void AddEnemyToContext(EnemyControllerBase enemy, ref CombatContext context)
     {
         context.totalEnemies++;
 
@@ -275,19 +258,60 @@ public class CombatManager : MonoBehaviour
             context.closestEnemyKind = enemy.enemyKind;
             context.closestEnemyName = enemy.displayName;
         }
+    }
 
-        attackScore += enemy.GetAttackOpportunityScore(playerAttackRange);
-        dodgeScore += enemy.GetDodgeThreatScore();
-
-        if (enemy.enemyKind == EnemyKind.Ranged)
+    private CombatActionPriorBuilder ResolvePriorBuilder()
+    {
+        if (priorBuilder == null)
         {
-            attackScore += 0.15f;
+            priorBuilder = GetComponent<CombatActionPriorBuilder>();
         }
 
-        if (enemy.enemyKind == EnemyKind.Boss)
+        if (priorBuilder == null)
         {
-            attackScore += 0.45f;
+            priorBuilder = gameObject.AddComponent<CombatActionPriorBuilder>();
+            priorBuilder.baseAttackScore = baseAttackScore;
+            priorBuilder.baseDodgeScore = baseDodgeScore;
         }
+
+        return priorBuilder;
+    }
+
+    private CombatState MapEnemyState(ADUIEnemyState state)
+    {
+        switch (state)
+        {
+            case ADUIEnemyState.Attacking:
+            case ADUIEnemyState.Urgent:
+                return CombatState.Attacking;
+            case ADUIEnemyState.Telegraph:
+                return CombatState.Telegraph;
+            default:
+                return CombatState.Safe;
+        }
+    }
+
+    private bool ShouldUseLegacyStatePriorFallback(CombatContext context)
+    {
+        return useLegacyStatePriorFallback &&
+               context.totalEnemies == 0 &&
+               context.incomingProjectiles == 0 &&
+               HasLegacyStateEnemy();
+    }
+
+    private bool HasLegacyStateEnemy()
+    {
+        if (legacyStateEnemy == null)
+        {
+            legacyStateEnemy = FindAnyObjectByType<SimulatedEnemy>();
+        }
+
+        return legacyStateEnemy != null;
+    }
+
+    private bool IsLegacyStatePriorActive()
+    {
+        return CurrentPriorResult.source == "sample_scene_state_prior" && HasLegacyStateEnemy();
     }
 
     private int CountIncomingProjectiles()
@@ -471,8 +495,9 @@ public class CombatManager : MonoBehaviour
 
         if (enemyHpText != null)
         {
-            enemyHpText.text =
-                $"Enemies {CurrentContext.totalEnemies}  M:{CurrentContext.meleeEnemies} R:{CurrentContext.rangedEnemies} B:{CurrentContext.bossEnemies}";
+            enemyHpText.text = IsLegacyStatePriorActive()
+                ? $"Enemy: SimulatedEnemy   State: {currentState}"
+                : $"Enemies {CurrentContext.totalEnemies}  M:{CurrentContext.meleeEnemies} R:{CurrentContext.rangedEnemies} B:{CurrentContext.bossEnemies}";
         }
 
         if (priorText != null)
@@ -482,12 +507,19 @@ public class CombatManager : MonoBehaviour
 
         if (contextText != null)
         {
-            string closestText = CurrentContext.totalEnemies > 0
-                ? $"{CurrentContext.closestEnemyName} {CurrentContext.closestEnemyDistance:F1}m"
-                : "None";
+            if (IsLegacyStatePriorActive())
+            {
+                contextText.text = "Source: sample_scene_state_prior   CombatContext: unavailable in SampleScene";
+            }
+            else
+            {
+                string closestText = CurrentContext.totalEnemies > 0
+                    ? $"{CurrentContext.closestEnemyName} {CurrentContext.closestEnemyDistance:F1}m"
+                    : "None";
 
-            contextText.text =
-                $"Closest: {closestText}   Close: {CurrentContext.closeEnemies}   Telegraphs: {CurrentContext.telegraphingEnemies}   Arrows: {CurrentContext.incomingProjectiles}";
+                contextText.text =
+                    $"Closest: {closestText}   Close: {CurrentContext.closeEnemies}   Telegraphs: {CurrentContext.telegraphingEnemies}   Arrows: {CurrentContext.incomingProjectiles}";
+            }
         }
 
         if (feedbackLogText != null && feedbackLogText.text.Length > 0 && Time.time > feedbackClearTime)
@@ -498,7 +530,11 @@ public class CombatManager : MonoBehaviour
 
     private void UpdatePlayerHpUI()
     {
-        if (playerHpText != null && playerController != null)
+        if (playerHpText != null && IsLegacyStatePriorActive())
+        {
+            playerHpText.text = "Player HP: SampleScene prototype";
+        }
+        else if (playerHpText != null && playerController != null)
         {
             playerHpText.text = $"Player HP: {playerController.CurrentHP} / {playerController.maxHP}";
         }

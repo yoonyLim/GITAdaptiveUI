@@ -151,9 +151,10 @@ public class BayesianInputDecoder : MonoBehaviour
     {
         var attackMargin = Mathf.Abs(result.distanceToAttack - input.attackButton.visualRadius);
         var dodgeMargin = Mathf.Abs(result.distanceToDodge - input.dodgeButton.visualRadius);
-        var margin = Mathf.Max(Mathf.Min(input.attackButton.visualRadius, input.dodgeButton.visualRadius) * 0.25f, ambiguityMarginPx);
+        var radiusMargin = Mathf.Min(input.attackButton.visualRadius, input.dodgeButton.visualRadius) * 0.25f;
+        var margin = ambiguityMarginPx > 0f ? Mathf.Min(ambiguityMarginPx, radiusMargin) : radiusMargin;
         var betweenGap = Mathf.Abs(result.distanceToAttack - result.distanceToDodge);
-        return attackMargin <= margin || dodgeMargin <= margin || betweenGap <= margin;
+        return Mathf.Min(attackMargin, dodgeMargin, betweenGap) <= margin;
     }
 
     private float GaussianDistanceLikelihood(float distance, float variance)

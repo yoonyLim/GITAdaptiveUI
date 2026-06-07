@@ -20,8 +20,15 @@ public class UserTouchModel : MonoBehaviour
     public float dodgeVariance = 180f * 180f;
     public int dodgeSampleCount;
 
+    [Header("Online Adaptation")]
+    public bool enableOnlineAdaptation = true;
+    [Range(0.001f, 0.2f)] public float onlineLearningRate = 0.035f;
+    public int minimumSamplesBeforeOnlineAdaptation = 8;
+
     private readonly List<Vector2> attackSamples = new List<Vector2>();
     private readonly List<Vector2> dodgeSamples = new List<Vector2>();
+    private float attackReferenceRadius = 180f;
+    private float dodgeReferenceRadius = 180f;
 
     public bool HasCalibration => attackSampleCount > 0 && dodgeSampleCount > 0;
 
@@ -42,14 +49,47 @@ public class UserTouchModel : MonoBehaviour
     {
         if (action == ADUIAction.Attack)
         {
+            attackReferenceRadius = Mathf.Max(button.visualRadius, 1f);
             attackSamples.Add(ToRelative(touchPosition, button));
         }
         else if (action == ADUIAction.Dodge)
         {
+            dodgeReferenceRadius = Mathf.Max(button.visualRadius, 1f);
             dodgeSamples.Add(ToRelative(touchPosition, button));
         }
 
         Recompute();
+    }
+
+    public void AddOnlineAdaptationSample(ADUIAction action, Vector2 touchPosition, ADUIButtonGeometry button)
+    {
+        if (!enableOnlineAdaptation)
+        {
+            return;
+        }
+
+        if (action == ADUIAction.Attack && attackSampleCount >= minimumSamplesBeforeOnlineAdaptation)
+        {
+            BlendProfileSample(action, ToRelative(touchPosition, button), Mathf.Max(button.visualRadius, 1f));
+        }
+        else if (action == ADUIAction.Dodge && dodgeSampleCount >= minimumSamplesBeforeOnlineAdaptation)
+        {
+            BlendProfileSample(action, ToRelative(touchPosition, button), Mathf.Max(button.visualRadius, 1f));
+        }
+    }
+
+    public void ResetCalibration()
+    {
+        attackSamples.Clear();
+        dodgeSamples.Clear();
+        attackMean = Vector2.zero;
+        dodgeMean = Vector2.zero;
+        attackVariance = publicDefaultVariance;
+        dodgeVariance = publicDefaultVariance;
+        attackSampleCount = 0;
+        dodgeSampleCount = 0;
+        attackReferenceRadius = 180f;
+        dodgeReferenceRadius = 180f;
     }
 
     public float SpatialLikelihood(ADUIAction action, Vector2 touchPosition, ADUIButtonGeometry button)
@@ -73,12 +113,12 @@ public class UserTouchModel : MonoBehaviour
         if (attackSamples.Count > 0)
         {
             attackMean = Mean(attackSamples);
-            attackVariance = RelativeVarianceToScreenVariance(attackSamples, attackMean);
+            attackVariance = RelativeVarianceToScreenVariance(attackSamples, attackMean, attackReferenceRadius);
         }
         if (dodgeSamples.Count > 0)
         {
             dodgeMean = Mean(dodgeSamples);
-            dodgeVariance = RelativeVarianceToScreenVariance(dodgeSamples, dodgeMean);
+            dodgeVariance = RelativeVarianceToScreenVariance(dodgeSamples, dodgeMean, dodgeReferenceRadius);
         }
     }
 
@@ -94,7 +134,9 @@ public class UserTouchModel : MonoBehaviour
             dodgeMeanY = dodgeMean.y,
             dodgeVariance = dodgeVariance,
             dodgeSampleCount = dodgeSampleCount,
-            publicDefaultVariance = publicDefaultVariance
+            publicDefaultVariance = publicDefaultVariance,
+            attackReferenceRadius = attackReferenceRadius,
+            dodgeReferenceRadius = dodgeReferenceRadius
         };
         Directory.CreateDirectory(Path.GetDirectoryName(path));
         File.WriteAllText(path, JsonUtility.ToJson(profile, true));
@@ -111,6 +153,8 @@ public class UserTouchModel : MonoBehaviour
         attackSampleCount = profile.attackSampleCount;
         dodgeSampleCount = profile.dodgeSampleCount;
         publicDefaultVariance = ClampVariance(profile.publicDefaultVariance);
+        attackReferenceRadius = profile.attackReferenceRadius > 0f ? profile.attackReferenceRadius : attackReferenceRadius;
+        dodgeReferenceRadius = profile.dodgeReferenceRadius > 0f ? profile.dodgeReferenceRadius : dodgeReferenceRadius;
     }
 
     private Vector2 Mean(List<Vector2> samples)
@@ -120,13 +164,36 @@ public class UserTouchModel : MonoBehaviour
         return sum / Mathf.Max(samples.Count, 1);
     }
 
-    private float RelativeVarianceToScreenVariance(List<Vector2> samples, Vector2 mean)
+    private void BlendProfileSample(ADUIAction action, Vector2 relativeTouch, float referenceRadius)
+    {
+        float rate = Mathf.Clamp01(onlineLearningRate);
+        if (action == ADUIAction.Attack)
+        {
+            Vector2 nextMean = Vector2.Lerp(attackMean, relativeTouch, rate);
+            float sampleVariance = (relativeTouch - nextMean).sqrMagnitude * referenceRadius * referenceRadius;
+            attackMean = nextMean;
+            attackVariance = ClampVariance(Mathf.Lerp(attackVariance, Mathf.Max(sampleVariance, minVariance), rate));
+            attackSampleCount++;
+            attackReferenceRadius = referenceRadius;
+        }
+        else if (action == ADUIAction.Dodge)
+        {
+            Vector2 nextMean = Vector2.Lerp(dodgeMean, relativeTouch, rate);
+            float sampleVariance = (relativeTouch - nextMean).sqrMagnitude * referenceRadius * referenceRadius;
+            dodgeMean = nextMean;
+            dodgeVariance = ClampVariance(Mathf.Lerp(dodgeVariance, Mathf.Max(sampleVariance, minVariance), rate));
+            dodgeSampleCount++;
+            dodgeReferenceRadius = referenceRadius;
+        }
+    }
+
+    private float RelativeVarianceToScreenVariance(List<Vector2> samples, Vector2 mean, float referenceRadius)
     {
         if (samples.Count < 2) return publicDefaultVariance;
         var total = 0f;
         foreach (var sample in samples) total += (sample - mean).sqrMagnitude;
         var relativeVariance = total / samples.Count;
-        return ClampVariance(relativeVariance * 180f * 180f);
+        return ClampVariance(relativeVariance * Mathf.Max(referenceRadius, 1f) * Mathf.Max(referenceRadius, 1f));
     }
 
     private float ClampVariance(float variance)
@@ -146,6 +213,8 @@ public class UserTouchModel : MonoBehaviour
         public float dodgeVariance;
         public int dodgeSampleCount;
         public float publicDefaultVariance;
+        public float attackReferenceRadius;
+        public float dodgeReferenceRadius;
     }
 }
 
