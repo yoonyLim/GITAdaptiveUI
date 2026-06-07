@@ -47,6 +47,9 @@ public class AdaptiveTouchManager : MonoBehaviour
     public RectTransform healHitboxVisualizer;
     public RectTransform whirlwindHitboxVisualizer;
 
+    [Header("Movement Touch Area")]
+    public RectTransform movementJoystickTouchArea;
+
     [Header("Touch Tuning")]
     [Tooltip("Represents the player's fat-finger spread in screen pixels. Higher = wider forgiving area.")]
     [Range(50f, 400f)]
@@ -115,7 +118,17 @@ public class AdaptiveTouchManager : MonoBehaviour
     {
         CaptureBaseColorsIfNeeded();
 
+        if (IsInMovementJoystickArea(inputPos))
+        {
+            return;
+        }
+
         CombatManager combatManager = CombatManager.Instance;
+        if (TryExecuteDirectButton(inputPos, combatManager))
+        {
+            return;
+        }
+
         List<ActionCandidate> candidates = new List<ActionCandidate>(4);
 
         AddCandidate(candidates, AdaptiveAction.Attack, "ATTACK", visualAttackButton, combatManager != null ? combatManager.priorAttack : 0.5f, inputPos);
@@ -183,6 +196,81 @@ public class AdaptiveTouchManager : MonoBehaviour
             likelihood = likelihood,
             posterior = likelihood * Mathf.Clamp01(prior)
         });
+    }
+
+    private bool IsInMovementJoystickArea(Vector2 inputPos)
+    {
+        return movementJoystickTouchArea != null &&
+               RectTransformUtility.RectangleContainsScreenPoint(movementJoystickTouchArea, inputPos, null);
+    }
+
+    private bool TryExecuteDirectButton(Vector2 inputPos, CombatManager combatManager)
+    {
+        if (TryExecuteDirectAction(AdaptiveAction.Attack, "ATTACK", visualAttackButton, inputPos, combatManager) ||
+            TryExecuteDirectAction(AdaptiveAction.Dodge, "DODGE", visualDodgeButton, inputPos, combatManager) ||
+            TryExecuteDirectAction(AdaptiveAction.Heal, "HEAL", visualHealButton, inputPos, combatManager) ||
+            TryExecuteDirectAction(AdaptiveAction.Whirlwind, "WHIRLWIND", visualWhirlwindButton, inputPos, combatManager))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryExecuteDirectAction(
+        AdaptiveAction action,
+        string label,
+        Image image,
+        Vector2 inputPos,
+        CombatManager combatManager)
+    {
+        if (image == null || !RectTransformUtility.RectangleContainsScreenPoint(image.rectTransform, inputPos, null))
+        {
+            return false;
+        }
+
+        if (IsSkillCoolingDown(action, combatManager))
+        {
+            ReportCooldownBlocked(action, combatManager);
+            return true;
+        }
+
+        image.color = Color.Lerp(GetBaseColor(action), pressedColor, 0.55f);
+        Debug.Log($"[Adaptive Touch] {label} direct button tap accepted.");
+        ExecuteAction(action, combatManager);
+        return true;
+    }
+
+    private bool IsSkillCoolingDown(AdaptiveAction action, CombatManager combatManager)
+    {
+        PlayerController player = combatManager != null ? combatManager.playerController : null;
+        if (player == null)
+        {
+            return false;
+        }
+
+        return (action == AdaptiveAction.Heal && player.HealCooldownRemaining > 0f) ||
+               (action == AdaptiveAction.Whirlwind && player.WhirlwindCooldownRemaining > 0f);
+    }
+
+    private void ReportCooldownBlocked(AdaptiveAction action, CombatManager combatManager)
+    {
+        PlayerController player = combatManager != null ? combatManager.playerController : null;
+        float cooldown = 0f;
+        string label = action.ToString();
+
+        if (player != null && action == AdaptiveAction.Heal)
+        {
+            cooldown = player.HealCooldownRemaining;
+        }
+        else if (player != null && action == AdaptiveAction.Whirlwind)
+        {
+            cooldown = player.WhirlwindCooldownRemaining;
+        }
+
+        string message = $"{label} cooldown: {cooldown:F1}s.";
+        combatManager?.ReportFeedback(message, Color.gray);
+        Debug.Log($"[Adaptive Touch] {message}");
     }
 
     private void ExecuteAction(AdaptiveAction action, CombatManager combatManager)

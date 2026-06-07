@@ -34,9 +34,10 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         TextMeshProUGUI feedbackText = CreateText(canvas.transform, "Feedback Text", string.Empty, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 52f), new Vector2(700f, 42f), 22, TextAlignmentOptions.Center);
 
         Image attackImage = CreateActionButton(canvas.transform, "Attack Button", "Attack", new Vector2(1f, 0f), new Vector2(-150f, 150f), new Color(0.95f, 0.22f, 0.18f, 0.88f), out RectTransform attackHitbox, out _);
-        Image dodgeImage = CreateActionButton(canvas.transform, "Dodge Button", "Dodge", new Vector2(1f, 0f), new Vector2(-320f, 118f), new Color(0.12f, 0.58f, 1f, 0.88f), out RectTransform dodgeHitbox, out _);
-        Image healImage = CreateActionButton(canvas.transform, "Heal Button", "Heal", new Vector2(1f, 0f), new Vector2(-150f, 320f), new Color(0.18f, 0.78f, 0.38f, 0.88f), out RectTransform healHitbox, out TextMeshProUGUI healLabel);
-        Image whirlwindImage = CreateActionButton(canvas.transform, "Whirlwind Button", "Whirlwind", new Vector2(1f, 0f), new Vector2(-320f, 288f), new Color(1f, 0.68f, 0.12f, 0.88f), out RectTransform whirlwindHitbox, out TextMeshProUGUI whirlwindLabel);
+        Image dodgeImage = CreateActionButton(canvas.transform, "Dodge Button", "Dodge", new Vector2(1f, 0f), new Vector2(-370f, 150f), new Color(0.12f, 0.58f, 1f, 0.88f), out RectTransform dodgeHitbox, out _);
+        Image healImage = CreateActionButton(canvas.transform, "Heal Button", "Heal", new Vector2(1f, 0f), new Vector2(-150f, 370f), new Color(0.18f, 0.78f, 0.38f, 0.88f), out RectTransform healHitbox, out TextMeshProUGUI healLabel);
+        Image whirlwindImage = CreateActionButton(canvas.transform, "Whirlwind Button", "Whirlwind", new Vector2(1f, 0f), new Vector2(-370f, 370f), new Color(1f, 0.68f, 0.12f, 0.88f), out RectTransform whirlwindHitbox, out TextMeshProUGUI whirlwindLabel);
+        RectTransform joystickTouchArea = CreateMovementJoystick(canvas.transform, player);
         Button skipButton = CreateSkipButton(canvas.transform);
 
         GameObject managerObject = new GameObject("Game Manager");
@@ -69,6 +70,7 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         touchManager.dodgeHitboxVisualizer = dodgeHitbox;
         touchManager.healHitboxVisualizer = healHitbox;
         touchManager.whirlwindHitboxVisualizer = whirlwindHitbox;
+        touchManager.movementJoystickTouchArea = joystickTouchArea;
     }
 
     private void CreateCameraIfNeeded()
@@ -145,22 +147,45 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         out RectTransform hitbox,
         out TextMeshProUGUI labelText)
     {
-        RectTransform buttonTransform = CreateRectTransform(name, parent, anchor, anchor, anchoredPosition, new Vector2(150f, 150f));
+        RectTransform buttonTransform = CreateRectTransform(name, parent, anchor, anchor, anchoredPosition, new Vector2(160f, 160f));
         Image image = buttonTransform.gameObject.AddComponent<Image>();
         image.sprite = PrototypeVisualFactory.SquareSprite;
         image.color = color;
         image.raycastTarget = false;
 
-        hitbox = CreateRectTransform(name + " Hitbox", buttonTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(180f, 180f));
+        hitbox = CreateRectTransform(name + " Hitbox", buttonTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(200f, 200f));
         Image hitboxImage = hitbox.gameObject.AddComponent<Image>();
         hitboxImage.sprite = PrototypeVisualFactory.CircleSprite;
         hitboxImage.color = new Color(color.r, color.g, color.b, 0.18f);
         hitboxImage.raycastTarget = false;
 
-        labelText = CreateText(buttonTransform, label + " Text", label, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(140f, 44f), 24, TextAlignmentOptions.Center);
+        labelText = CreateText(buttonTransform, label + " Text", label, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(150f, 48f), 24, TextAlignmentOptions.Center);
         labelText.fontSize = label.Length > 7 ? 17f : 24f;
         labelText.color = Color.white;
         return image;
+    }
+
+    private RectTransform CreateMovementJoystick(Transform parent, PlayerController player)
+    {
+        RectTransform baseTransform = CreateRectTransform("Movement Joystick", parent, new Vector2(0f, 0f), new Vector2(0f, 0f), new Vector2(190f, 170f), new Vector2(280f, 280f));
+        Image baseImage = baseTransform.gameObject.AddComponent<Image>();
+        baseImage.sprite = PrototypeVisualFactory.CircleSprite;
+        baseImage.color = new Color(0.72f, 0.82f, 0.9f, 0.2f);
+        baseImage.raycastTarget = true;
+        baseImage.preserveAspect = true;
+
+        RectTransform handleTransform = CreateRectTransform("Movement Joystick Handle", baseTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(96f, 96f));
+        Image handleImage = handleTransform.gameObject.AddComponent<Image>();
+        handleImage.sprite = PrototypeVisualFactory.CircleSprite;
+        handleImage.color = new Color(0.95f, 0.98f, 1f, 0.55f);
+        handleImage.raycastTarget = false;
+        handleImage.preserveAspect = true;
+
+        VirtualJoystick joystick = baseTransform.gameObject.AddComponent<VirtualJoystick>();
+        joystick.targetPlayer = player;
+        joystick.joystickBase = baseTransform;
+        joystick.joystickHandle = handleTransform;
+        return baseTransform;
     }
 
     private Button CreateSkipButton(Transform parent)

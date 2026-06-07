@@ -117,6 +117,13 @@ public class PlayerController : MonoBehaviour
         }
     }
 
+    public void SetVirtualMoveInput(Vector2 virtualInput)
+    {
+        inputVector = Vector2.ClampMagnitude(virtualInput, 1f);
+        actionInputActive = inputVector.sqrMagnitude > 0.001f;
+        RememberDirection(inputVector);
+    }
+
     public void ResetStats()
     {
         ResetStats(true);
