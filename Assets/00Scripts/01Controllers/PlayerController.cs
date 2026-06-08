@@ -169,8 +169,11 @@ public class PlayerController : MonoBehaviour
             return false;
         }
 
+        int previousHP = currentHP;
         currentHP = Mathf.Max(0, currentHP - damage);
+        int actualDamage = previousHP - currentHP;
         OnHpChanged?.Invoke(currentHP, maxHP);
+        RoguelikeGameManager.Instance?.RecordPlayerDamage(actualDamage);
 
         if (currentHP <= 0)
         {
@@ -195,6 +198,7 @@ public class PlayerController : MonoBehaviour
         amountHealed = currentHP - previousHP;
         nextHealReadyTime = Time.time + healCooldown;
         OnHpChanged?.Invoke(currentHP, maxHP);
+        RoguelikeGameManager.Instance?.RecordPlayerHealing(amountHealed);
         return amountHealed > 0;
     }
 

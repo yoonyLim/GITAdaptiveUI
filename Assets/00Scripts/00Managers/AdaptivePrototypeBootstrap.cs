@@ -39,6 +39,9 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         Image whirlwindImage = CreateActionButton(canvas.transform, "Whirlwind Button", "Whirlwind", new Vector2(1f, 0f), new Vector2(-370f, 370f), new Color(1f, 0.68f, 0.12f, 0.88f), out RectTransform whirlwindHitbox, out TextMeshProUGUI whirlwindLabel);
         RectTransform joystickTouchArea = CreateMovementJoystick(canvas.transform, player);
         Button skipButton = CreateSkipButton(canvas.transform);
+        Image adaptiveToggleImage = CreateAdaptiveToggleButton(canvas.transform, out TextMeshProUGUI adaptiveToggleLabel);
+        GameObject startScreen = CreateStartScreen(canvas.transform, out Button startButton);
+        GameObject resultScreen = CreateResultScreen(canvas.transform, out TextMeshProUGUI resultText, out Button restartButton);
 
         GameObject managerObject = new GameObject("Game Manager");
         CombatManager combatManager = managerObject.AddComponent<CombatManager>();
@@ -48,7 +51,12 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         gameManager.playerTransform = player.transform;
         gameManager.playerController = player;
         gameManager.skipButton = skipButton;
+        gameManager.startButton = startButton;
+        gameManager.restartButton = restartButton;
+        gameManager.startScreenRoot = startScreen;
+        gameManager.resultScreenRoot = resultScreen;
         gameManager.stageText = stageText;
+        gameManager.resultText = resultText;
 
         combatManager.gameManager = gameManager;
         combatManager.playerController = player;
@@ -71,6 +79,8 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         touchManager.healHitboxVisualizer = healHitbox;
         touchManager.whirlwindHitboxVisualizer = whirlwindHitbox;
         touchManager.movementJoystickTouchArea = joystickTouchArea;
+        touchManager.adaptiveToggleButton = adaptiveToggleImage;
+        touchManager.adaptiveToggleLabel = adaptiveToggleLabel;
     }
 
     private void CreateCameraIfNeeded()
@@ -199,6 +209,65 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         button.targetGraphic = image;
 
         TextMeshProUGUI text = CreateText(rectTransform, "Skip Text", "Skip Stage", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(180f, 38f), 18, TextAlignmentOptions.Center);
+        text.color = Color.white;
+        return button;
+    }
+
+    private Image CreateAdaptiveToggleButton(Transform parent, out TextMeshProUGUI labelText)
+    {
+        RectTransform rectTransform = CreateRectTransform("Adaptive Toggle Button", parent, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-390f, -44f), new Vector2(260f, 52f));
+        Image image = rectTransform.gameObject.AddComponent<Image>();
+        image.sprite = PrototypeVisualFactory.SquareSprite;
+        image.color = new Color(0.18f, 0.72f, 0.44f, 0.92f);
+        image.raycastTarget = false;
+
+        labelText = CreateText(rectTransform, "Adaptive Toggle Text", "Adaptive: ON", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(240f, 38f), 18, TextAlignmentOptions.Center);
+        labelText.color = Color.white;
+        return image;
+    }
+
+    private GameObject CreateStartScreen(Transform parent, out Button startButton)
+    {
+        GameObject screen = CreateOverlayPanel(parent, "Start Screen", new Color(0.02f, 0.03f, 0.03f, 0.88f));
+        TextMeshProUGUI title = CreateText(screen.transform, "Start Title", "Adaptive UI Test", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 96f), new Vector2(760f, 84f), 46, TextAlignmentOptions.Center);
+        title.color = Color.white;
+
+        startButton = CreateMenuButton(screen.transform, "Start Button", "Start", new Vector2(0f, -28f), new Vector2(280f, 78f), new Color(0.18f, 0.72f, 0.44f, 0.95f));
+        return screen;
+    }
+
+    private GameObject CreateResultScreen(Transform parent, out TextMeshProUGUI resultText, out Button restartButton)
+    {
+        GameObject screen = CreateOverlayPanel(parent, "Result Screen", new Color(0.02f, 0.03f, 0.03f, 0.9f));
+        resultText = CreateText(screen.transform, "Result Text", "Final Results", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 72f), new Vector2(860f, 690f), 22, TextAlignmentOptions.TopLeft);
+        resultText.textWrappingMode = TextWrappingModes.Normal;
+
+        restartButton = CreateMenuButton(screen.transform, "Restart Button", "Restart", new Vector2(0f, -410f), new Vector2(250f, 70f), new Color(0.18f, 0.72f, 0.44f, 0.95f));
+        screen.SetActive(false);
+        return screen;
+    }
+
+    private GameObject CreateOverlayPanel(Transform parent, string name, Color color)
+    {
+        RectTransform rectTransform = CreateRectTransform(name, parent, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        Image image = rectTransform.gameObject.AddComponent<Image>();
+        image.sprite = PrototypeVisualFactory.SquareSprite;
+        image.color = color;
+        image.raycastTarget = true;
+        return rectTransform.gameObject;
+    }
+
+    private Button CreateMenuButton(Transform parent, string name, string label, Vector2 anchoredPosition, Vector2 size, Color color)
+    {
+        RectTransform rectTransform = CreateRectTransform(name, parent, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), anchoredPosition, size);
+        Image image = rectTransform.gameObject.AddComponent<Image>();
+        image.sprite = PrototypeVisualFactory.SquareSprite;
+        image.color = color;
+
+        Button button = rectTransform.gameObject.AddComponent<Button>();
+        button.targetGraphic = image;
+
+        TextMeshProUGUI text = CreateText(rectTransform, name + " Text", label, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, size - new Vector2(20f, 20f), 24, TextAlignmentOptions.Center);
         text.color = Color.white;
         return button;
     }

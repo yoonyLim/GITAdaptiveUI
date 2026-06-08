@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Text;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -19,24 +20,48 @@ public class RoguelikeGameManager : MonoBehaviour
     public Transform enemyRoot;
     public float spawnRadius = 7.5f;
     public float spawnRadiusJitter = 1.2f;
-    public bool startStageOnPlay = true;
+    public bool startStageOnPlay;
     public int startingStage = 1;
 
     [Header("UI")]
     public Button skipButton;
+    public Button startButton;
+    public Button restartButton;
+    public GameObject startScreenRoot;
+    public GameObject resultScreenRoot;
     public TextMeshProUGUI stageText;
+    public TextMeshProUGUI resultText;
 
     public int CurrentStage => currentStage;
+    public bool IsStageRunning => stageRunning;
     public IReadOnlyList<EnemyControllerBase> ActiveEnemies => activeEnemies;
     public Transform PlayerTransform => playerTransform;
     public PlayerController PlayerController => playerController;
 
     private readonly List<EnemyControllerBase> activeEnemies = new List<EnemyControllerBase>();
+    private readonly List<StageTelemetry> completedStageData = new List<StageTelemetry>();
     private int currentStage = 1;
+    private bool stageRunning;
     private bool isClearingStage;
     private bool prototypeComplete;
     private Coroutine autoAdvanceRoutine;
     private GameObject runtimePrefabRoot;
+    private StageTelemetry currentStageData;
+    private float stageStartTime;
+
+    private class StageTelemetry
+    {
+        public int stageNumber;
+        public int buttonPresses;
+        public int damageTaken;
+        public int healingDone;
+        public int touchDistanceSamples;
+        public float totalTouchDistance;
+        public float duration;
+        public bool skipped;
+
+        public float AverageTouchDistance => touchDistanceSamples <= 0 ? 0f : totalTouchDistance / touchDistanceSamples;
+    }
 
     private void Awake()
     {
@@ -63,10 +88,39 @@ public class RoguelikeGameManager : MonoBehaviour
             skipButton.onClick.AddListener(SkipStage);
         }
 
+        if (startButton != null)
+        {
+            startButton.onClick.RemoveListener(BeginPrototype);
+            startButton.onClick.AddListener(BeginPrototype);
+        }
+
+        if (restartButton != null)
+        {
+            restartButton.onClick.RemoveListener(BeginPrototype);
+            restartButton.onClick.AddListener(BeginPrototype);
+        }
+
         if (startStageOnPlay)
         {
-            StartStage(startingStage);
+            BeginPrototype();
         }
+        else
+        {
+            ShowStartScreen();
+        }
+    }
+
+    public void BeginPrototype()
+    {
+        completedStageData.Clear();
+        prototypeComplete = false;
+        stageRunning = false;
+        currentStageData = null;
+
+        SetScreenActive(startScreenRoot, false);
+        SetScreenActive(resultScreenRoot, false);
+
+        StartStage(startingStage);
     }
 
     public void StartStage(int stageNumber)
@@ -88,6 +142,7 @@ public class RoguelikeGameManager : MonoBehaviour
         }
 
         Debug.Log($"Starting Stage {currentStage}");
+        StartStageTelemetry(currentStage);
 
         switch (currentStage)
         {
@@ -111,6 +166,7 @@ public class RoguelikeGameManager : MonoBehaviour
     public void SkipStage()
     {
         Debug.Log("Stage Skipped!");
+        FinishCurrentStage(true);
         StartStage(currentStage + 1);
     }
 
@@ -126,6 +182,8 @@ public class RoguelikeGameManager : MonoBehaviour
 
         if (!isClearingStage && activeEnemies.Count == 0 && !prototypeComplete)
         {
+            FinishCurrentStage(false);
+
             if (autoAdvanceRoutine != null)
             {
                 StopCoroutine(autoAdvanceRoutine);
@@ -144,6 +202,38 @@ public class RoguelikeGameManager : MonoBehaviour
 
         activeEnemies.Remove(enemy);
         UpdateStageUI();
+    }
+
+    public void RecordButtonPress(float targetDistancePixels)
+    {
+        if (!stageRunning || currentStageData == null)
+        {
+            return;
+        }
+
+        currentStageData.buttonPresses++;
+        currentStageData.totalTouchDistance += Mathf.Max(0f, targetDistancePixels);
+        currentStageData.touchDistanceSamples++;
+    }
+
+    public void RecordPlayerDamage(int amount)
+    {
+        if (!stageRunning || currentStageData == null || amount <= 0)
+        {
+            return;
+        }
+
+        currentStageData.damageTaken += amount;
+    }
+
+    public void RecordPlayerHealing(int amount)
+    {
+        if (!stageRunning || currentStageData == null || amount <= 0)
+        {
+            return;
+        }
+
+        currentStageData.healingDone += amount;
     }
 
     private void SpawnEnemies(GameObject prefab, int count, EnemyKind fallbackKind)
@@ -392,6 +482,7 @@ public class RoguelikeGameManager : MonoBehaviour
 
     private void CompletePrototype()
     {
+        FinishCurrentStage(false);
         prototypeComplete = true;
         ClearEnemies();
         ResolveReferences();
@@ -403,7 +494,127 @@ public class RoguelikeGameManager : MonoBehaviour
 
         currentStage = 4;
         UpdateStageUI();
+        ShowResultScreen();
         Debug.Log("All stages complete!");
+    }
+
+    private void StartStageTelemetry(int stageNumber)
+    {
+        stageRunning = true;
+        stageStartTime = Time.time;
+        currentStageData = new StageTelemetry
+        {
+            stageNumber = stageNumber
+        };
+
+        if (skipButton != null)
+        {
+            skipButton.interactable = true;
+        }
+    }
+
+    private void FinishCurrentStage(bool skipped)
+    {
+        if (!stageRunning || currentStageData == null)
+        {
+            return;
+        }
+
+        currentStageData.duration = Mathf.Max(0f, Time.time - stageStartTime);
+        currentStageData.skipped = skipped;
+        completedStageData.Add(currentStageData);
+        currentStageData = null;
+        stageRunning = false;
+
+        if (skipButton != null)
+        {
+            skipButton.interactable = false;
+        }
+
+        UpdateStageUI();
+    }
+
+    private void ShowStartScreen()
+    {
+        prototypeComplete = false;
+        stageRunning = false;
+        currentStageData = null;
+        SetScreenActive(resultScreenRoot, false);
+        SetScreenActive(startScreenRoot, true);
+
+        if (skipButton != null)
+        {
+            skipButton.interactable = false;
+        }
+
+        UpdateStageUI();
+    }
+
+    private void ShowResultScreen()
+    {
+        SetScreenActive(startScreenRoot, false);
+        SetScreenActive(resultScreenRoot, true);
+
+        if (skipButton != null)
+        {
+            skipButton.interactable = false;
+        }
+
+        if (resultText != null)
+        {
+            resultText.text = BuildResultsText();
+        }
+    }
+
+    private void SetScreenActive(GameObject screenRoot, bool active)
+    {
+        if (screenRoot != null)
+        {
+            screenRoot.SetActive(active);
+        }
+    }
+
+    private string BuildResultsText()
+    {
+        StringBuilder builder = new StringBuilder();
+        builder.AppendLine("Final Results");
+
+        int totalButtons = 0;
+        int totalDamage = 0;
+        int totalHealing = 0;
+        float totalTime = 0f;
+        float totalDistance = 0f;
+        int totalDistanceSamples = 0;
+
+        for (int i = 0; i < completedStageData.Count; i++)
+        {
+            StageTelemetry data = completedStageData[i];
+            totalButtons += data.buttonPresses;
+            totalDamage += data.damageTaken;
+            totalHealing += data.healingDone;
+            totalTime += data.duration;
+            totalDistance += data.totalTouchDistance;
+            totalDistanceSamples += data.touchDistanceSamples;
+
+            string skippedText = data.skipped ? " (skipped)" : string.Empty;
+            builder.AppendLine();
+            builder.AppendLine($"Stage {data.stageNumber}{skippedText}");
+            builder.AppendLine($"Button presses: {data.buttonPresses}");
+            builder.AppendLine($"Damage taken: {data.damageTaken}");
+            builder.AppendLine($"Healed: {data.healingDone}");
+            builder.AppendLine($"Stage time: {data.duration:F1}s");
+            builder.AppendLine($"Avg touch error: {data.AverageTouchDistance:F1}px");
+        }
+
+        float totalAverageDistance = totalDistanceSamples <= 0 ? 0f : totalDistance / totalDistanceSamples;
+        builder.AppendLine();
+        builder.AppendLine("Total");
+        builder.AppendLine($"Button presses: {totalButtons}");
+        builder.AppendLine($"Damage taken: {totalDamage}");
+        builder.AppendLine($"Healed: {totalHealing}");
+        builder.AppendLine($"Time: {totalTime:F1}s");
+        builder.AppendLine($"Avg touch error: {totalAverageDistance:F1}px");
+        return builder.ToString();
     }
 
     private void UpdateStageUI()
@@ -416,6 +627,12 @@ public class RoguelikeGameManager : MonoBehaviour
         if (prototypeComplete || currentStage > 3)
         {
             stageText.text = "Prototype Clear";
+            return;
+        }
+
+        if (!stageRunning)
+        {
+            stageText.text = "Ready";
             return;
         }
 

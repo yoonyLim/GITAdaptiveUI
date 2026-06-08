@@ -50,6 +50,11 @@ public class AdaptiveTouchManager : MonoBehaviour
     [Header("Movement Touch Area")]
     public RectTransform movementJoystickTouchArea;
 
+    [Header("Adaptive Mode Toggle")]
+    public bool adaptiveTouchEnabled = true;
+    public Image adaptiveToggleButton;
+    public TextMeshProUGUI adaptiveToggleLabel;
+
     [Header("Touch Tuning")]
     [Tooltip("Represents the player's fat-finger spread in screen pixels. Higher = wider forgiving area.")]
     [Range(50f, 400f)]
@@ -85,6 +90,7 @@ public class AdaptiveTouchManager : MonoBehaviour
         UpdateHitboxVisualizer(healHitboxVisualizer, CalculateDynamicRadius(healPrior));
         UpdateHitboxVisualizer(whirlwindHitboxVisualizer, CalculateDynamicRadius(whirlwindPrior));
         UpdateSkillCooldownLabels(combatManager);
+        UpdateAdaptiveModeVisual();
 
 #if UNITY_EDITOR
         if (Mouse.current != null)
@@ -123,8 +129,24 @@ public class AdaptiveTouchManager : MonoBehaviour
             return;
         }
 
+        if (TryToggleAdaptiveMode(inputPos))
+        {
+            return;
+        }
+
+        RoguelikeGameManager gameManager = RoguelikeGameManager.Instance;
+        if (gameManager != null && !gameManager.IsStageRunning)
+        {
+            return;
+        }
+
         CombatManager combatManager = CombatManager.Instance;
         if (TryExecuteDirectButton(inputPos, combatManager))
+        {
+            return;
+        }
+
+        if (!adaptiveTouchEnabled)
         {
             return;
         }
@@ -162,6 +184,7 @@ public class AdaptiveTouchManager : MonoBehaviour
         Debug.Log(
             $"[Adaptive Touch] {best.label} accepted. Prior={best.prior:F2}, Likelihood={best.likelihood:F2}, Posterior={best.posterior:F3}. {FormatCandidatePosteriors(candidates)}");
 
+        RecordActionTouch(best.image, inputPos);
         ExecuteAction(best.action, combatManager);
     }
 
@@ -204,6 +227,24 @@ public class AdaptiveTouchManager : MonoBehaviour
                RectTransformUtility.RectangleContainsScreenPoint(movementJoystickTouchArea, inputPos, null);
     }
 
+    private bool TryToggleAdaptiveMode(Vector2 inputPos)
+    {
+        if (adaptiveToggleButton == null ||
+            !RectTransformUtility.RectangleContainsScreenPoint(adaptiveToggleButton.rectTransform, inputPos, null))
+        {
+            return false;
+        }
+
+        SetAdaptiveTouchEnabled(!adaptiveTouchEnabled);
+        return true;
+    }
+
+    public void SetAdaptiveTouchEnabled(bool enabled)
+    {
+        adaptiveTouchEnabled = enabled;
+        UpdateAdaptiveModeVisual();
+    }
+
     private bool TryExecuteDirectButton(Vector2 inputPos, CombatManager combatManager)
     {
         if (TryExecuteDirectAction(AdaptiveAction.Attack, "ATTACK", visualAttackButton, inputPos, combatManager) ||
@@ -228,6 +269,8 @@ public class AdaptiveTouchManager : MonoBehaviour
         {
             return false;
         }
+
+        RecordActionTouch(image, inputPos);
 
         if (IsSkillCoolingDown(action, combatManager))
         {
@@ -271,6 +314,17 @@ public class AdaptiveTouchManager : MonoBehaviour
         string message = $"{label} cooldown: {cooldown:F1}s.";
         combatManager?.ReportFeedback(message, Color.gray);
         Debug.Log($"[Adaptive Touch] {message}");
+    }
+
+    private void RecordActionTouch(Image image, Vector2 inputPos)
+    {
+        if (image == null || RoguelikeGameManager.Instance == null)
+        {
+            return;
+        }
+
+        float distance = Vector2.Distance(inputPos, image.rectTransform.position);
+        RoguelikeGameManager.Instance.RecordButtonPress(distance);
     }
 
     private void ExecuteAction(AdaptiveAction action, CombatManager combatManager)
@@ -353,9 +407,39 @@ public class AdaptiveTouchManager : MonoBehaviour
             return;
         }
 
+        if (!adaptiveTouchEnabled)
+        {
+            if (visualizer.gameObject.activeSelf)
+            {
+                visualizer.gameObject.SetActive(false);
+            }
+
+            return;
+        }
+
+        if (!visualizer.gameObject.activeSelf)
+        {
+            visualizer.gameObject.SetActive(true);
+        }
+
         float scaleFactor = mainCanvas != null ? Mathf.Max(0.01f, mainCanvas.scaleFactor) : 1f;
         float uiSize = (screenRadius * 2f) / scaleFactor;
         visualizer.sizeDelta = new Vector2(uiSize, uiSize);
+    }
+
+    private void UpdateAdaptiveModeVisual()
+    {
+        if (adaptiveToggleLabel != null)
+        {
+            adaptiveToggleLabel.text = adaptiveTouchEnabled ? "Adaptive: ON" : "Adaptive: OFF";
+        }
+
+        if (adaptiveToggleButton != null)
+        {
+            adaptiveToggleButton.color = adaptiveTouchEnabled
+                ? new Color(0.18f, 0.72f, 0.44f, 0.92f)
+                : new Color(0.32f, 0.34f, 0.36f, 0.92f);
+        }
     }
 
     private void UpdateSkillCooldownLabels(CombatManager combatManager)
