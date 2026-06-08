@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "source": "analysis_multigame_scene_teacher_student",
+  "prior_mapping": {
+    "action_first+avoid_or_active": {
+      "attack": 0.15,
+      "dodge": 0.85
+    },
+    "action_first+critical": {
+      "attack": 0.05,
+      "dodge": 0.95
+    },
+    "action_first+engage_warning": {
+      "attack": 0.65,
+      "dodge": 0.35
+    },
+    "action_first+engage_safe": {
+      "attack": 0.85,
+      "dodge": 0.15
+    },
+    "cognition_first": {
+      "attack": 0.5,
+      "dodge": 0.5
+    },
+    "guidance_procedure": {
+      "attack": 0.5,
+      "dodge": 0.5
+    },
+    "learning_review": {
+      "attack": 0.5,
+      "dodge": 0.5
+    },
+    "unknown_low_confidence": {
+      "attack": 0.5,
+      "dodge": 0.5
+    }
+  },
+  "confidence_mixing": "P_final = c * P_rule + (1-c) * neutral",
+  "neutral_prior": {
+    "attack": 0.5,
+    "dodge": 0.5
+  },
+  "confidence_threshold": 0.25,
+  "ttl_ms_default": 200,
+  "safety_rules": [
+    "low confidence -> neutral prior",
+    "non-gameplay -> neutral prior",
+    "stale state -> neutral prior or internal fallback",
+    "clear input preservation remains mandatory"
+  ],
+  "warnings": [
+    "Teacher/student estimates situation demand only.",
+    "They do not directly execute Attack/Dodge.",
+    "Unity Bayesian decoder and safety gate own final correction."
+  ]
+}

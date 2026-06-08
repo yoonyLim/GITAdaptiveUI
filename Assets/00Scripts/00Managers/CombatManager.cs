@@ -10,6 +10,7 @@ public class CombatManager : MonoBehaviour
     [Header("Prototype References")]
     public RoguelikeGameManager gameManager;
     public PlayerController playerController;
+    public CombatActionPriorBuilder priorBuilder;
 
     [Header("UI Text Elements")]
     public TextMeshProUGUI stateText;
@@ -28,6 +29,9 @@ public class CombatManager : MonoBehaviour
     public float projectileNearRadius = 0.95f;
     public float projectileLookAheadSeconds = 0.75f;
 
+    [Header("SampleScene Compatibility")]
+    public bool useLegacyStatePriorFallback = true;
+
     public enum CombatState
     {
         Safe,
@@ -43,8 +47,10 @@ public class CombatManager : MonoBehaviour
     [HideInInspector] public float priorWhirlwind = 0.05f;
 
     public CombatContext CurrentContext { get; private set; }
+    public CombatActionPriorResult CurrentPriorResult { get; private set; }
 
     private float feedbackClearTime;
+    private SimulatedEnemy legacyStateEnemy;
 
     public struct CombatContext
     {
@@ -94,6 +100,12 @@ public class CombatManager : MonoBehaviour
 
         if (playerController == null)
         {
+            if (IsLegacyStatePriorActive())
+            {
+                ReportFeedback("Attack accepted (SampleScene state prototype).", Color.green);
+                return;
+            }
+
             ReportFeedback("No player found.", Color.red);
             return;
         }
@@ -119,6 +131,12 @@ public class CombatManager : MonoBehaviour
 
         if (playerController == null)
         {
+            if (IsLegacyStatePriorActive())
+            {
+                ReportFeedback("Dodge accepted (SampleScene state prototype).", Color.cyan);
+                return;
+            }
+
             ReportFeedback("No player found.", Color.red);
             return;
         }
@@ -258,7 +276,7 @@ public class CombatManager : MonoBehaviour
         }
         else
         {
-            EnemyControllerBase[] enemies = FindObjectsByType<EnemyControllerBase>();
+            EnemyControllerBase[] enemies = FindObjectsByType<EnemyControllerBase>(FindObjectsSortMode.None);
             for (int i = 0; i < enemies.Length; i++)
             {
                 EnemyControllerBase enemy = enemies[i];
@@ -277,17 +295,6 @@ public class CombatManager : MonoBehaviour
         }
 
         context.incomingProjectiles = CountIncomingProjectiles();
-        dodgeScore += context.incomingProjectiles * 2.45f;
-
-        if (context.closeEnemies >= 4)
-        {
-            dodgeScore += 1.25f;
-        }
-
-        if (context.closeEnemies >= 8)
-        {
-            dodgeScore += 0.85f;
-        }
 
         if (playerController != null && playerController.CurrentHP <= playerController.maxHP * 0.35f)
         {
@@ -305,28 +312,13 @@ public class CombatManager : MonoBehaviour
 
         NormalizePriors(attackScore, dodgeScore, healScore, whirlwindScore);
 
-        if (context.attackingEnemies > 0 || context.incomingProjectiles > 0)
+        if (!useStateFallback)
         {
-            currentState = CombatState.Attacking;
+            currentState = MapEnemyState(CurrentPriorResult.enemyState);
         }
-        else if (context.telegraphingEnemies > 0 || priorDodge >= 0.62f)
-        {
-            currentState = CombatState.Telegraph;
-        }
-        else
-        {
-            currentState = CombatState.Safe;
-        }
-
-        CurrentContext = context;
     }
 
-    private void AddEnemyToContext(
-        EnemyControllerBase enemy,
-        ref CombatContext context,
-        ref float attackScore,
-        ref float dodgeScore,
-        float playerAttackRange)
+    private void AddEnemyToContext(EnemyControllerBase enemy, ref CombatContext context)
     {
         context.totalEnemies++;
 
@@ -364,19 +356,60 @@ public class CombatManager : MonoBehaviour
             context.closestEnemyKind = enemy.enemyKind;
             context.closestEnemyName = enemy.displayName;
         }
+    }
 
-        attackScore += enemy.GetAttackOpportunityScore(playerAttackRange);
-        dodgeScore += enemy.GetDodgeThreatScore();
-
-        if (enemy.enemyKind == EnemyKind.Ranged)
+    private CombatActionPriorBuilder ResolvePriorBuilder()
+    {
+        if (priorBuilder == null)
         {
-            attackScore += 0.15f;
+            priorBuilder = GetComponent<CombatActionPriorBuilder>();
         }
 
-        if (enemy.enemyKind == EnemyKind.Boss)
+        if (priorBuilder == null)
         {
-            attackScore += 0.45f;
+            priorBuilder = gameObject.AddComponent<CombatActionPriorBuilder>();
+            priorBuilder.baseAttackScore = baseAttackScore;
+            priorBuilder.baseDodgeScore = baseDodgeScore;
         }
+
+        return priorBuilder;
+    }
+
+    private CombatState MapEnemyState(ADUIEnemyState state)
+    {
+        switch (state)
+        {
+            case ADUIEnemyState.Attacking:
+            case ADUIEnemyState.Urgent:
+                return CombatState.Attacking;
+            case ADUIEnemyState.Telegraph:
+                return CombatState.Telegraph;
+            default:
+                return CombatState.Safe;
+        }
+    }
+
+    private bool ShouldUseLegacyStatePriorFallback(CombatContext context)
+    {
+        return useLegacyStatePriorFallback &&
+               context.totalEnemies == 0 &&
+               context.incomingProjectiles == 0 &&
+               HasLegacyStateEnemy();
+    }
+
+    private bool HasLegacyStateEnemy()
+    {
+        if (legacyStateEnemy == null)
+        {
+            legacyStateEnemy = FindAnyObjectByType<SimulatedEnemy>();
+        }
+
+        return legacyStateEnemy != null;
+    }
+
+    private bool IsLegacyStatePriorActive()
+    {
+        return CurrentPriorResult.source == "sample_scene_state_prior" && HasLegacyStateEnemy();
     }
 
     private void ApplySkillScores(CombatContext context, ref float healScore, ref float whirlwindScore)
@@ -666,8 +699,9 @@ public class CombatManager : MonoBehaviour
 
         if (enemyHpText != null)
         {
-            enemyHpText.text =
-                $"Enemies {CurrentContext.totalEnemies}  M:{CurrentContext.meleeEnemies} R:{CurrentContext.rangedEnemies} B:{CurrentContext.bossEnemies}";
+            enemyHpText.text = IsLegacyStatePriorActive()
+                ? $"Enemy: SimulatedEnemy   State: {currentState}"
+                : $"Enemies {CurrentContext.totalEnemies}  M:{CurrentContext.meleeEnemies} R:{CurrentContext.rangedEnemies} B:{CurrentContext.bossEnemies}";
         }
 
         if (priorText != null)
@@ -678,9 +712,15 @@ public class CombatManager : MonoBehaviour
 
         if (contextText != null)
         {
-            string closestText = CurrentContext.totalEnemies > 0
-                ? $"{CurrentContext.closestEnemyName} {CurrentContext.closestEnemyDistance:F1}m"
-                : "None";
+            if (IsLegacyStatePriorActive())
+            {
+                contextText.text = "Source: sample_scene_state_prior   CombatContext: unavailable in SampleScene";
+            }
+            else
+            {
+                string closestText = CurrentContext.totalEnemies > 0
+                    ? $"{CurrentContext.closestEnemyName} {CurrentContext.closestEnemyDistance:F1}m"
+                    : "None";
 
             string skillText = playerController != null
                 ? $"HealCD {playerController.HealCooldownRemaining:F1}s   WhirlCD {playerController.WhirlwindCooldownRemaining:F1}s"
@@ -698,7 +738,11 @@ public class CombatManager : MonoBehaviour
 
     private void UpdatePlayerHpUI()
     {
-        if (playerHpText != null && playerController != null)
+        if (playerHpText != null && IsLegacyStatePriorActive())
+        {
+            playerHpText.text = "Player HP: SampleScene prototype";
+        }
+        else if (playerHpText != null && playerController != null)
         {
             playerHpText.text = $"Player HP: {playerController.CurrentHP} / {playerController.maxHP}";
         }

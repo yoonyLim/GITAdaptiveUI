@@ -1,0 +1,15 @@
+{
+  "session_id": "smoke_test_user_001",
+  "participant_id": "test_user_public",
+  "device_model": "synthetic_unity_fixture",
+  "platform": "editor_fixture",
+  "screen_width": 1080,
+  "screen_height": 1920,
+  "dpi": 420,
+  "unity_version": "fixture",
+  "app_version": "0.1.0",
+  "timestamp_start": "2026-05-18T00:00:00Z",
+  "handedness": "unavailable",
+  "notes": "Synthetic Unity-like smoke fixture for pipeline tests; not real user data.",
+  "source_type": "synthetic_unity_fixture"
+}

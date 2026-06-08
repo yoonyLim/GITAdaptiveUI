@@ -44,7 +44,22 @@ public static class AdaptivePrototypeSceneBuilder
 
         GameObject managerObject = new GameObject("Game Manager");
         CombatManager combatManager = managerObject.AddComponent<CombatManager>();
+        CombatActionPriorBuilder priorBuilder = managerObject.AddComponent<CombatActionPriorBuilder>();
         RoguelikeGameManager gameManager = managerObject.AddComponent<RoguelikeGameManager>();
+        ParticipantConfig participantConfig = managerObject.AddComponent<ParticipantConfig>();
+        ExperimentSessionManager sessionManager = managerObject.AddComponent<ExperimentSessionManager>();
+        ConditionManager conditionManager = managerObject.AddComponent<ConditionManager>();
+        TrialScenarioManager trialScenarioManager = managerObject.AddComponent<TrialScenarioManager>();
+        UserTouchModel userTouchModel = managerObject.AddComponent<UserTouchModel>();
+        BayesianInputDecoder decoder = managerObject.AddComponent<BayesianInputDecoder>();
+        SafetyGate safetyGate = managerObject.AddComponent<SafetyGate>();
+        RawTouchLogger rawTouchLogger = managerObject.AddComponent<RawTouchLogger>();
+        BayesianDecisionLogger decisionLogger = managerObject.AddComponent<BayesianDecisionLogger>();
+        ButtonLayoutLogger layoutLogger = managerObject.AddComponent<ButtonLayoutLogger>();
+        HPOutcomeLogger hpOutcomeLogger = managerObject.AddComponent<HPOutcomeLogger>();
+        ModePolicyLogger modePolicyLogger = managerObject.AddComponent<ModePolicyLogger>();
+        InteractionDemandModel demandModel = managerObject.AddComponent<InteractionDemandModel>();
+        AdaptiveUIPolicyEngine policyEngine = managerObject.AddComponent<AdaptiveUIPolicyEngine>();
         AdaptiveTouchManager touchManager = managerObject.AddComponent<AdaptiveTouchManager>();
 
         gameManager.playerTransform = player.transform;
@@ -59,12 +74,23 @@ public static class AdaptivePrototypeSceneBuilder
 
         combatManager.gameManager = gameManager;
         combatManager.playerController = player;
+        combatManager.priorBuilder = priorBuilder;
         combatManager.stateText = stateText;
         combatManager.playerHpText = playerHpText;
         combatManager.enemyHpText = enemyText;
         combatManager.feedbackLogText = feedbackText;
         combatManager.priorText = priorText;
         combatManager.contextText = contextText;
+
+        sessionManager.participantConfig = participantConfig;
+        trialScenarioManager.sessionManager = sessionManager;
+        trialScenarioManager.conditionManager = conditionManager;
+        rawTouchLogger.sessionManager = sessionManager;
+        decisionLogger.sessionManager = sessionManager;
+        layoutLogger.sessionManager = sessionManager;
+        hpOutcomeLogger.sessionManager = sessionManager;
+        modePolicyLogger.sessionManager = sessionManager;
+        decoder.userTouchModel = userTouchModel;
 
         touchManager.mainCanvas = canvas;
         touchManager.visualAttackButton = attackImage;
