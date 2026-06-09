@@ -35,6 +35,11 @@ public class MeleeEnemyController : EnemyControllerBase
 
     protected override void EnsureBaseVisual()
     {
+        if (HasSpumVisual())
+        {
+            return;
+        }
+
         bodyRenderer = PrototypeVisualFactory.EnsureSpriteRenderer(
             gameObject,
             PrototypeVisualFactory.CircleSprite,
@@ -49,6 +54,7 @@ public class MeleeEnemyController : EnemyControllerBase
     {
         IsTelegraphing = true;
         SetBodyColor(telegraphColor);
+        PlayMeleeAttackVisual(telegraphDuration + attackFrameDuration + 0.1f);
 
         Vector2 origin = transform.position;
         Vector2 attackDirection = DirectionToPlayer();

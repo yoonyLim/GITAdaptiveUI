@@ -132,10 +132,12 @@ public class CombatManager : MonoBehaviour
         EnemyControllerBase target = FindBestAttackTarget(playerController.attackRange + 0.45f);
         if (target == null)
         {
+            playerController.PlayAttackVisual();
             ReportFeedback("Attack missed: no enemy in reach.", Color.gray);
             return false;
         }
 
+        playerController.PlayAttackVisual(target.transform.position);
         bool assistedRange = target.DistanceToPlayer > playerController.attackRange;
         int damage = playerController.attackDamage;
         target.TakeDamage(damage);

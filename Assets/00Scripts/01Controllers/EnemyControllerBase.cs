@@ -30,6 +30,10 @@ public abstract class EnemyControllerBase : MonoBehaviour
     public Color attackColor = Color.red;
     public Color damageFlashColor = Color.white;
 
+    [Header("SPUM Visual")]
+    public SpumVisualController spumVisual;
+    public float deathDestroyDelay = 0.35f;
+
     public int CurrentHP => currentHP;
     public bool IsAlive => currentHP > 0;
     public bool IsCalibrationScenarioEnemy { get; private set; }
@@ -52,11 +56,13 @@ public abstract class EnemyControllerBase : MonoBehaviour
     private Coroutine flashRoutine;
     private bool deathNotified;
     private bool calibrationAiFrozen;
+    private bool movedThisFrame;
 
     protected virtual void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
         bodyRenderer = GetComponent<SpriteRenderer>();
+        ResolveSpumVisual();
         currentHP = maxHP;
         EnsureBaseVisual();
     }
@@ -78,8 +84,10 @@ public abstract class EnemyControllerBase : MonoBehaviour
         deathNotified = false;
         nextAttackTime = Time.time + Random.Range(0.15f, 0.75f);
         DistanceToPlayer = playerTransform ? Vector2.Distance(transform.position, playerTransform.position) : float.MaxValue;
+        ResolveSpumVisual();
         EnsureBaseVisual();
         SetBodyColor(normalColor);
+        spumVisual?.PlayIdle(true);
     }
 
     public void ConfigureCalibrationPose(bool telegraphing, bool attacking, bool freezeAi = true)
@@ -112,6 +120,15 @@ public abstract class EnemyControllerBase : MonoBehaviour
             SetBodyColor(normalColor);
         }
 
+        if (IsAttacking)
+        {
+            spumVisual?.PlayMeleeAttack(attackFrameDuration + 0.2f);
+        }
+        else
+        {
+            spumVisual?.PlayIdle(true);
+        }
+
         RefreshDistanceToPlayer();
     }
 
@@ -141,13 +158,16 @@ public abstract class EnemyControllerBase : MonoBehaviour
         }
 
         DistanceToPlayer = Vector2.Distance(transform.position, playerTransform.position);
+        movedThisFrame = false;
         FacePlayer();
         if (calibrationAiFrozen)
         {
+            UpdateSpumMovement(false);
             return;
         }
 
         TickBehavior();
+        UpdateSpumMovement(movedThisFrame && !IsTelegraphing && !IsAttacking);
     }
 
     protected abstract void TickBehavior();
@@ -167,6 +187,7 @@ public abstract class EnemyControllerBase : MonoBehaviour
             return;
         }
 
+        spumVisual?.PlayDamaged();
         if (flashRoutine != null)
         {
             StopCoroutine(flashRoutine);
@@ -281,10 +302,29 @@ public abstract class EnemyControllerBase : MonoBehaviour
         {
             bodyRenderer.color = color;
         }
+
+        if (spumVisual != null)
+        {
+            if (ColorsApproximately(color, normalColor))
+            {
+                spumVisual.ResetTint();
+            }
+            else
+            {
+                float strength = ColorsApproximately(color, damageFlashColor) ? 0.55f : 0.28f;
+                spumVisual.SetTint(color, strength);
+            }
+        }
     }
 
     protected virtual void EnsureBaseVisual()
     {
+        ResolveSpumVisual();
+        if (spumVisual != null && spumVisual.HasVisual)
+        {
+            return;
+        }
+
         if (bodyRenderer == null)
         {
             bodyRenderer = PrototypeVisualFactory.EnsureSpriteRenderer(
@@ -294,6 +334,32 @@ public abstract class EnemyControllerBase : MonoBehaviour
                 Vector2.one,
                 2);
         }
+    }
+
+    protected bool HasSpumVisual()
+    {
+        ResolveSpumVisual();
+        return spumVisual != null && spumVisual.HasVisual;
+    }
+
+    protected void PlayMeleeAttackVisual(float lockDuration)
+    {
+        spumVisual?.PlayMeleeAttack(lockDuration);
+    }
+
+    protected void PlaySkillAttackVisual(float lockDuration)
+    {
+        spumVisual?.PlaySkillAttack(lockDuration);
+    }
+
+    protected void PlayBowAttackVisual(float lockDuration)
+    {
+        spumVisual?.PlayBowAttack(lockDuration);
+    }
+
+    protected void PlayMagicAttackVisual(float lockDuration)
+    {
+        spumVisual?.PlayMagicAttack(lockDuration);
     }
 
     protected virtual void OnDestroy()
@@ -309,6 +375,13 @@ public abstract class EnemyControllerBase : MonoBehaviour
     private void MoveTo(Vector2 nextPosition)
     {
         nextPosition = RoguelikeGameManager.ClampToArena(nextPosition, RoguelikeGameManager.EnemyArenaPadding);
+        Vector2 currentPosition = transform.position;
+        Vector2 moveDelta = nextPosition - currentPosition;
+        if (moveDelta.sqrMagnitude > 0.00001f)
+        {
+            movedThisFrame = true;
+            spumVisual?.FaceDirection(moveDelta);
+        }
 
         if (rb != null)
         {
@@ -323,6 +396,12 @@ public abstract class EnemyControllerBase : MonoBehaviour
     private void FacePlayer()
     {
         Vector2 direction = DirectionToPlayer();
+        if (spumVisual != null && spumVisual.HasVisual)
+        {
+            spumVisual.FaceDirection(direction);
+            return;
+        }
+
         transform.rotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(direction.y, direction.x) * Mathf.Rad2Deg);
     }
 
@@ -373,13 +452,15 @@ public abstract class EnemyControllerBase : MonoBehaviour
     {
         CleanupTelegraphs();
         deathNotified = true;
+        spumVisual?.ResetTint();
+        spumVisual?.PlayDeath();
 
         if (gameManager != null)
         {
             gameManager.NotifyEnemyDefeated(this);
         }
 
-        Destroy(gameObject);
+        Destroy(gameObject, spumVisual != null && spumVisual.HasVisual ? deathDestroyDelay : 0f);
     }
 
     private void CleanupTelegraphs()
@@ -393,5 +474,41 @@ public abstract class EnemyControllerBase : MonoBehaviour
         }
 
         spawnedTelegraphs.Clear();
+    }
+
+    private void ResolveSpumVisual()
+    {
+        if (spumVisual == null)
+        {
+            spumVisual = GetComponent<SpumVisualController>();
+        }
+
+        if (spumVisual == null)
+        {
+            spumVisual = GetComponentInChildren<SpumVisualController>(true);
+        }
+
+        if (spumVisual == null && GetComponentInChildren<SPUM_Prefabs>(true) != null)
+        {
+            spumVisual = gameObject.AddComponent<SpumVisualController>();
+            spumVisual.Configure(string.Empty, Vector3.zero, Vector3.one, 0);
+        }
+    }
+
+    private void UpdateSpumMovement(bool moving)
+    {
+        if (spumVisual != null)
+        {
+            spumVisual.SetMoving(moving);
+        }
+    }
+
+    private static bool ColorsApproximately(Color a, Color b)
+    {
+        const float tolerance = 0.01f;
+        return Mathf.Abs(a.r - b.r) <= tolerance &&
+               Mathf.Abs(a.g - b.g) <= tolerance &&
+               Mathf.Abs(a.b - b.b) <= tolerance &&
+               Mathf.Abs(a.a - b.a) <= tolerance;
     }
 }

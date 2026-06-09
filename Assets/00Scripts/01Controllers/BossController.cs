@@ -7,7 +7,12 @@ public class BossController : EnemyControllerBase
     public float smashRadius = 2.65f;
     public float shockwaveLength = 12f;
     public float shockwaveWidth = 1.15f;
-    public float bossKeepDistance = 4.5f;
+    public float bossKeepDistance = 3.1f;
+    public float bossRetreatDistance = 1.55f;
+    public float bossApproachSpeedMultiplier = 0.95f;
+    public float bossRetreatSpeedMultiplier = 0.45f;
+    public float attackLeewayAfterApproach = 0.65f;
+    public float bossPositionDeadZone = 0.18f;
 
     [Header("Optional Telegraph Prefabs")]
     public GameObject smashWarningPrefab;
@@ -27,13 +32,17 @@ public class BossController : EnemyControllerBase
             return;
         }
 
-        if (DistanceToPlayer > bossKeepDistance + 1.75f)
+        if (DistanceToPlayer > bossKeepDistance + bossPositionDeadZone)
         {
-            MoveToward(playerTransform.position, 0.55f);
+            MoveToward(GetPositionAroundPlayer(bossKeepDistance), bossApproachSpeedMultiplier);
+            if (DistanceToPlayer > bossKeepDistance + attackLeewayAfterApproach)
+            {
+                return;
+            }
         }
-        else if (DistanceToPlayer < bossKeepDistance - 1.25f)
+        else if (DistanceToPlayer < bossRetreatDistance)
         {
-            MoveAwayFrom(playerTransform.position, 0.45f);
+            MoveAwayFrom(playerTransform.position, bossRetreatSpeedMultiplier);
         }
 
         if (!CanStartAttack())
@@ -53,6 +62,11 @@ public class BossController : EnemyControllerBase
 
     protected override void EnsureBaseVisual()
     {
+        if (HasSpumVisual())
+        {
+            return;
+        }
+
         bodyRenderer = PrototypeVisualFactory.EnsureSpriteRenderer(
             gameObject,
             PrototypeVisualFactory.CircleSprite,
@@ -78,6 +92,7 @@ public class BossController : EnemyControllerBase
     {
         IsTelegraphing = true;
         SetBodyColor(telegraphColor);
+        PlaySkillAttackVisual(telegraphDuration + attackFrameDuration + 0.15f);
 
         Vector2 targetPosition = playerTransform != null ? playerTransform.position : transform.position;
         GameObject warning = CreateSmashWarning(targetPosition);
@@ -113,6 +128,7 @@ public class BossController : EnemyControllerBase
     {
         IsTelegraphing = true;
         SetBodyColor(telegraphColor);
+        PlayMagicAttackVisual(telegraphDuration + attackFrameDuration + 0.15f);
 
         Vector2 origin = transform.position;
         Vector2 direction = DirectionToPlayer();
@@ -183,13 +199,30 @@ public class BossController : EnemyControllerBase
             new Color(1f, 0f, 0f, 0.24f)));
     }
 
+    private Vector2 GetPositionAroundPlayer(float distanceFromPlayer)
+    {
+        if (playerTransform == null)
+        {
+            return transform.position;
+        }
+
+        Vector2 directionToPlayer = DirectionToPlayer();
+        return (Vector2)playerTransform.position - directionToPlayer * Mathf.Max(0.1f, distanceFromPlayer);
+    }
+
     private void Reset()
     {
         enemyKind = EnemyKind.Boss;
         displayName = "Boss";
         maxHP = 360;
-        moveSpeed = 1.35f;
+        moveSpeed = 1.65f;
         attackRange = 3f;
+        bossKeepDistance = 3.1f;
+        bossRetreatDistance = 1.55f;
+        bossApproachSpeedMultiplier = 0.95f;
+        bossRetreatSpeedMultiplier = 0.45f;
+        attackLeewayAfterApproach = 0.65f;
+        bossPositionDeadZone = 0.18f;
         attackCooldown = 2.65f;
         telegraphDuration = 1.25f;
         attackFrameDuration = 0.22f;

@@ -43,6 +43,11 @@ public class RangedEnemyController : EnemyControllerBase
 
     protected override void EnsureBaseVisual()
     {
+        if (HasSpumVisual())
+        {
+            return;
+        }
+
         bodyRenderer = PrototypeVisualFactory.EnsureSpriteRenderer(
             gameObject,
             PrototypeVisualFactory.CircleSprite,
@@ -57,6 +62,7 @@ public class RangedEnemyController : EnemyControllerBase
     {
         IsTelegraphing = true;
         SetBodyColor(telegraphColor);
+        PlayBowAttackVisual(telegraphDuration + attackFrameDuration + 0.1f);
 
         Vector2 origin = firePoint != null ? firePoint.position : transform.position;
         Vector2 direction = DirectionToPlayer();

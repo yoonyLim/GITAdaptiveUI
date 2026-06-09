@@ -18,6 +18,16 @@ public class RoguelikeGameManager : MonoBehaviour
     public GameObject rangedEnemyPrefab;
     public GameObject bossEnemyPrefab;
 
+    [Header("SPUM Visuals")]
+    public bool useSpumVisuals = true;
+    public string meleeSpumResourcePath = "Addons/BasicPack/2_Prefab/Skelton/SPUM_20240911215639833";
+    public string rangedSpumResourcePath = "Addons/BasicPack/2_Prefab/Skelton/SPUM_20240911215639920";
+    public string bossSpumResourcePath = "Addons/BasicPack/2_Prefab/Devil/SPUM_20240911215640719";
+    public Vector3 enemySpumVisualLocalPosition = new Vector3(0f, -0.1f, 0f);
+    public Vector3 meleeSpumVisualLocalScale = new Vector3(1.25f, 1.25f, 1f);
+    public Vector3 rangedSpumVisualLocalScale = new Vector3(1.25f, 1.25f, 1f);
+    public Vector3 bossSpumVisualLocalScale = new Vector3(2.05f, 2.05f, 1f);
+
     [Header("Player & Spawning")]
     public Transform playerTransform;
     public PlayerController playerController;
@@ -613,7 +623,13 @@ public class RoguelikeGameManager : MonoBehaviour
 
     private GameObject CreateMeleePrototype()
     {
-        GameObject enemy = CreateEnemyPrototypeObject("Prototype Sword Enemy", new Color(0.95f, 0.38f, 0.28f, 1f), Vector2.one * 0.9f);
+        GameObject enemy = CreateEnemyPrototypeObject(
+            "Prototype Sword Enemy",
+            new Color(0.95f, 0.38f, 0.28f, 1f),
+            Vector2.one * 0.9f,
+            meleeSpumResourcePath,
+            meleeSpumVisualLocalScale,
+            10);
         MeleeEnemyController controller = enemy.AddComponent<MeleeEnemyController>();
         controller.maxHP = 35;
         controller.moveSpeed = 2.9f;
@@ -630,7 +646,13 @@ public class RoguelikeGameManager : MonoBehaviour
 
     private GameObject CreateRangedPrototype()
     {
-        GameObject enemy = CreateEnemyPrototypeObject("Prototype Bow Enemy", new Color(0.45f, 0.64f, 1f, 1f), Vector2.one * 0.86f);
+        GameObject enemy = CreateEnemyPrototypeObject(
+            "Prototype Bow Enemy",
+            new Color(0.45f, 0.64f, 1f, 1f),
+            Vector2.one * 0.86f,
+            rangedSpumResourcePath,
+            rangedSpumVisualLocalScale,
+            10);
         RangedEnemyController controller = enemy.AddComponent<RangedEnemyController>();
         controller.maxHP = 28;
         controller.moveSpeed = 2.05f;
@@ -649,7 +671,13 @@ public class RoguelikeGameManager : MonoBehaviour
 
     private GameObject CreateBossPrototype()
     {
-        GameObject enemy = CreateEnemyPrototypeObject("Prototype Boss Enemy", new Color(0.55f, 0.18f, 0.72f, 1f), Vector2.one * 1.75f);
+        GameObject enemy = CreateEnemyPrototypeObject(
+            "Prototype Boss Enemy",
+            new Color(0.55f, 0.18f, 0.72f, 1f),
+            Vector2.one * 1.75f,
+            bossSpumResourcePath,
+            bossSpumVisualLocalScale,
+            12);
         CircleCollider2D collider = enemy.GetComponent<CircleCollider2D>();
         if (collider != null)
         {
@@ -658,8 +686,14 @@ public class RoguelikeGameManager : MonoBehaviour
 
         BossController controller = enemy.AddComponent<BossController>();
         controller.maxHP = 360;
-        controller.moveSpeed = 1.35f;
+        controller.moveSpeed = 1.65f;
         controller.attackRange = 3f;
+        controller.bossKeepDistance = 3.1f;
+        controller.bossRetreatDistance = 1.55f;
+        controller.bossApproachSpeedMultiplier = 0.95f;
+        controller.bossRetreatSpeedMultiplier = 0.45f;
+        controller.attackLeewayAfterApproach = 0.65f;
+        controller.bossPositionDeadZone = 0.18f;
         controller.attackCooldown = 2.65f;
         controller.telegraphDuration = 1.25f;
         controller.attackFrameDuration = 0.22f;
@@ -670,13 +704,29 @@ public class RoguelikeGameManager : MonoBehaviour
         return enemy;
     }
 
-    private GameObject CreateEnemyPrototypeObject(string name, Color color, Vector2 size)
+    private GameObject CreateEnemyPrototypeObject(
+        string name,
+        Color color,
+        Vector2 size,
+        string spumResourcePath,
+        Vector3 spumLocalScale,
+        int spumSortingOrderOffset)
     {
         GameObject enemy = new GameObject(name);
         enemy.transform.SetParent(runtimePrefabRoot.transform, false);
         enemy.SetActive(false);
 
-        PrototypeVisualFactory.EnsureSpriteRenderer(enemy, PrototypeVisualFactory.CircleSprite, color, size, 2);
+        SpumVisualController visual = null;
+        if (useSpumVisuals && !string.IsNullOrEmpty(spumResourcePath))
+        {
+            visual = enemy.AddComponent<SpumVisualController>();
+            visual.Configure(spumResourcePath, enemySpumVisualLocalPosition, spumLocalScale, spumSortingOrderOffset);
+        }
+
+        if (visual == null || !visual.HasVisual)
+        {
+            PrototypeVisualFactory.EnsureSpriteRenderer(enemy, PrototypeVisualFactory.CircleSprite, color, size, 2);
+        }
 
         Rigidbody2D body = enemy.AddComponent<Rigidbody2D>();
         body.bodyType = RigidbodyType2D.Kinematic;

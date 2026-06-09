@@ -29,6 +29,13 @@ public class PlayerController : MonoBehaviour
     public Color bodyColor = new Color(0.2f, 0.75f, 1f, 1f);
     public Color invulnerableColor = new Color(0.65f, 0.95f, 1f, 0.75f);
 
+    [Header("SPUM Visual")]
+    public bool useSpumVisual = true;
+    public string spumVisualResourcePath = "Addons/BasicPack/2_Prefab/Human/SPUM_20240911215638389";
+    public Vector3 spumVisualLocalPosition = new Vector3(0f, -0.12f, 0f);
+    public Vector3 spumVisualLocalScale = new Vector3(1.35f, 1.35f, 1f);
+    public int spumSortingOrderOffset = 20;
+
     public int CurrentHP => currentHP;
     public bool IsDodging => isDodging;
     public bool IsInvulnerable => invulnerableUntil > Time.time;
@@ -44,6 +51,7 @@ public class PlayerController : MonoBehaviour
 
     private Rigidbody2D rb;
     private SpriteRenderer bodyRenderer;
+    private SpumVisualController spumVisual;
     private Vector2 inputVector;
     private Vector2 lastNonZeroDirection = Vector2.right;
     private int currentHP;
@@ -81,12 +89,16 @@ public class PlayerController : MonoBehaviour
             Debug.LogWarning("The built-in Player tag is unavailable; enemy lookup will use manager references instead.");
         }
 
-        bodyRenderer = PrototypeVisualFactory.EnsureSpriteRenderer(
-            gameObject,
-            PrototypeVisualFactory.CircleSprite,
-            bodyColor,
-            Vector2.one * 0.9f,
-            4);
+        ResolveSpumVisual();
+        if (spumVisual == null || !spumVisual.HasVisual)
+        {
+            bodyRenderer = PrototypeVisualFactory.EnsureSpriteRenderer(
+                gameObject,
+                PrototypeVisualFactory.CircleSprite,
+                bodyColor,
+                Vector2.one * 0.9f,
+                4);
+        }
 
         ResetStats(false);
     }
@@ -94,6 +106,7 @@ public class PlayerController : MonoBehaviour
     private void Update()
     {
         ReadKeyboardFallback();
+        UpdateSpumMovementVisual();
         UpdateVisualState();
     }
 
@@ -188,6 +201,13 @@ public class PlayerController : MonoBehaviour
         }
 
         OnHpChanged?.Invoke(currentHP, maxHP);
+        if (spumVisual != null)
+        {
+            spumVisual.ResetTint();
+            spumVisual.FaceDirection(lastNonZeroDirection);
+            spumVisual.PlayIdle(true);
+        }
+
         Debug.Log("Player stats reset to full.");
     }
 
@@ -206,7 +226,12 @@ public class PlayerController : MonoBehaviour
 
         if (currentHP <= 0)
         {
+            spumVisual?.PlayDeath();
             Debug.Log("Player Died!");
+        }
+        else
+        {
+            spumVisual?.PlayDamaged();
         }
 
         return true;
@@ -228,6 +253,7 @@ public class PlayerController : MonoBehaviour
         nextHealReadyTime = Time.time + healCooldown;
         OnHpChanged?.Invoke(currentHP, maxHP);
         RoguelikeGameManager.Instance?.RecordPlayerHealing(amountHealed);
+        spumVisual?.PlayBuff();
         return amountHealed > 0;
     }
 
@@ -239,6 +265,7 @@ public class PlayerController : MonoBehaviour
         }
 
         nextWhirlwindReadyTime = Time.time + whirlwindCooldown;
+        spumVisual?.PlaySkillAttack(0.5f);
         return true;
     }
 
@@ -246,6 +273,8 @@ public class PlayerController : MonoBehaviour
     {
         Vector2 dodgeDirection = requestedDirection.sqrMagnitude > 0.001f ? requestedDirection.normalized : lastNonZeroDirection;
         RememberDirection(dodgeDirection);
+        spumVisual?.FaceDirection(dodgeDirection);
+        spumVisual?.PlayMove(true);
 
         if (dodgeRoutine != null)
         {
@@ -253,6 +282,24 @@ public class PlayerController : MonoBehaviour
         }
 
         dodgeRoutine = StartCoroutine(DodgeRoutine(dodgeDirection));
+    }
+
+    public void PlayAttackVisual()
+    {
+        spumVisual?.FaceDirection(lastNonZeroDirection);
+        spumVisual?.PlayMeleeAttack();
+    }
+
+    public void PlayAttackVisual(Vector2 targetPosition)
+    {
+        Vector2 direction = targetPosition - (Vector2)transform.position;
+        if (direction.sqrMagnitude > 0.001f)
+        {
+            RememberDirection(direction);
+            spumVisual?.FaceDirection(direction);
+        }
+
+        spumVisual?.PlayMeleeAttack();
     }
 
     private void ReadKeyboardFallback()
@@ -356,5 +403,48 @@ public class PlayerController : MonoBehaviour
         {
             bodyRenderer.color = IsInvulnerable ? invulnerableColor : bodyColor;
         }
+
+        if (spumVisual != null)
+        {
+            if (IsInvulnerable)
+            {
+                spumVisual.SetTint(invulnerableColor, 0.18f);
+            }
+            else
+            {
+                spumVisual.ResetTint();
+            }
+        }
+    }
+
+    private void ResolveSpumVisual()
+    {
+        if (!useSpumVisual)
+        {
+            return;
+        }
+
+        spumVisual = GetComponent<SpumVisualController>();
+        if (spumVisual == null)
+        {
+            spumVisual = gameObject.AddComponent<SpumVisualController>();
+        }
+
+        spumVisual.Configure(
+            spumVisualResourcePath,
+            spumVisualLocalPosition,
+            spumVisualLocalScale,
+            spumSortingOrderOffset);
+    }
+
+    private void UpdateSpumMovementVisual()
+    {
+        if (spumVisual == null)
+        {
+            return;
+        }
+
+        spumVisual.FaceDirection(lastNonZeroDirection);
+        spumVisual.SetMoving(IsMoving || isDodging);
     }
 }
