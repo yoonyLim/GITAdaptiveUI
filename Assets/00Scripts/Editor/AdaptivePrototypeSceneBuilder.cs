@@ -13,6 +13,9 @@ public static class AdaptivePrototypeSceneBuilder
     private const string ScenePath = "Assets/Scenes/AdaptivePrototype.unity";
     private const string GeneratedFolderPath = "Assets/00Scripts/Editor/Generated";
     private const string CircleSpriteAssetPath = GeneratedFolderPath + "/AdaptiveHitboxCircle.asset";
+    private const float ActionButtonSize = 124f;
+    private const float ActionButtonHitboxSize = 148f;
+    private const float ActionButtonLabelWidth = 116f;
 
     [MenuItem("Tools/Adaptive UI/Create Prototype Scene")]
     public static void CreateScene()
@@ -21,6 +24,7 @@ public static class AdaptivePrototypeSceneBuilder
 
         Camera camera = CreateCamera();
         PlayerController player = CreatePlayer();
+        ConfigureCameraFollow(camera, player.transform);
         Canvas canvas = CreateCanvas();
         CreateEventSystem();
 
@@ -32,10 +36,10 @@ public static class AdaptivePrototypeSceneBuilder
         TextMeshProUGUI contextText = CreateText(canvas.transform, "Detailed Context Text", "Closest: None", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(520f, -224f), new Vector2(1000f, 34f), 17, TextAlignmentOptions.Left);
         TextMeshProUGUI feedbackText = CreateText(canvas.transform, "Feedback Text", string.Empty, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 52f), new Vector2(700f, 42f), 22, TextAlignmentOptions.Center);
 
-        Image attackImage = CreateActionButton(canvas.transform, "Attack Button", "Attack", new Vector2(1f, 0f), new Vector2(-150f, 150f), new Color(0.95f, 0.22f, 0.18f, 0.88f), out RectTransform attackHitbox, out _);
-        Image dodgeImage = CreateActionButton(canvas.transform, "Dodge Button", "Dodge", new Vector2(1f, 0f), new Vector2(-370f, 150f), new Color(0.12f, 0.58f, 1f, 0.88f), out RectTransform dodgeHitbox, out _);
-        Image healImage = CreateActionButton(canvas.transform, "Heal Button", "Heal", new Vector2(1f, 0f), new Vector2(-150f, 370f), new Color(0.18f, 0.78f, 0.38f, 0.88f), out RectTransform healHitbox, out TextMeshProUGUI healLabel);
-        Image whirlwindImage = CreateActionButton(canvas.transform, "Whirlwind Button", "Whirlwind", new Vector2(1f, 0f), new Vector2(-370f, 370f), new Color(1f, 0.68f, 0.12f, 0.88f), out RectTransform whirlwindHitbox, out TextMeshProUGUI whirlwindLabel);
+        Image attackImage = CreateActionButton(canvas.transform, "Attack Button", "Attack", new Vector2(1f, 0f), new Vector2(-126f, 126f), new Color(0.95f, 0.22f, 0.18f, 0.88f), out RectTransform attackHitbox, out _);
+        Image dodgeImage = CreateActionButton(canvas.transform, "Dodge Button", "Dodge", new Vector2(1f, 0f), new Vector2(-292f, 126f), new Color(0.12f, 0.58f, 1f, 0.88f), out RectTransform dodgeHitbox, out _);
+        Image healImage = CreateActionButton(canvas.transform, "Heal Button", "Heal", new Vector2(1f, 0f), new Vector2(-126f, 292f), new Color(0.18f, 0.78f, 0.38f, 0.88f), out RectTransform healHitbox, out TextMeshProUGUI healLabel);
+        Image whirlwindImage = CreateActionButton(canvas.transform, "Whirlwind Button", "Whirlwind", new Vector2(1f, 0f), new Vector2(-292f, 292f), new Color(1f, 0.68f, 0.12f, 0.88f), out RectTransform whirlwindHitbox, out TextMeshProUGUI whirlwindLabel);
         RectTransform joystickTouchArea = CreateMovementJoystick(canvas.transform, player);
         Button skipButton = CreateSkipButton(canvas.transform);
         Image adaptiveToggleImage = CreateAdaptiveToggleButton(canvas.transform, out TextMeshProUGUI adaptiveToggleLabel);
@@ -126,12 +130,18 @@ public static class AdaptivePrototypeSceneBuilder
 
         Camera camera = cameraObject.AddComponent<Camera>();
         camera.orthographic = true;
-        camera.orthographicSize = 7.2f;
+        camera.orthographicSize = 5.4f;
         camera.backgroundColor = new Color(0.06f, 0.08f, 0.08f, 1f);
         camera.clearFlags = CameraClearFlags.SolidColor;
 
         cameraObject.AddComponent<AudioListener>();
         return camera;
+    }
+
+    private static void ConfigureCameraFollow(Camera camera, Transform playerTransform)
+    {
+        TopDownCameraFollow follow = camera.gameObject.AddComponent<TopDownCameraFollow>();
+        follow.SetTarget(playerTransform);
     }
 
     private static PlayerController CreatePlayer()
@@ -177,20 +187,21 @@ public static class AdaptivePrototypeSceneBuilder
         out RectTransform hitbox,
         out TextMeshProUGUI labelText)
     {
-        RectTransform buttonTransform = CreateRectTransform(name, parent, anchor, anchor, anchoredPosition, new Vector2(160f, 160f));
+        RectTransform buttonTransform = CreateRectTransform(name, parent, anchor, anchor, anchoredPosition, new Vector2(ActionButtonSize, ActionButtonSize));
         Image image = buttonTransform.gameObject.AddComponent<Image>();
-        image.sprite = GetUiSprite();
+        image.sprite = GetCircleSprite();
         image.color = color;
         image.raycastTarget = false;
+        image.preserveAspect = true;
 
-        hitbox = CreateRectTransform(name + " Hitbox", buttonTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(200f, 200f));
+        hitbox = CreateRectTransform(name + " Hitbox", buttonTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(ActionButtonHitboxSize, ActionButtonHitboxSize));
         Image hitboxImage = hitbox.gameObject.AddComponent<Image>();
         hitboxImage.sprite = GetCircleSprite();
-        hitboxImage.color = new Color(color.r, color.g, color.b, 0.18f);
+        hitboxImage.color = new Color(color.r, color.g, color.b, 0.1f);
         hitboxImage.raycastTarget = false;
 
-        labelText = CreateText(buttonTransform, label + " Text", label, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(150f, 48f), 24, TextAlignmentOptions.Center);
-        labelText.fontSize = label.Length > 7 ? 17f : 24f;
+        labelText = CreateText(buttonTransform, label + " Text", label, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(ActionButtonLabelWidth, 42f), 22, TextAlignmentOptions.Center);
+        labelText.fontSize = label.Length > 7 ? 14f : 21f;
         labelText.color = Color.white;
 
         return image;

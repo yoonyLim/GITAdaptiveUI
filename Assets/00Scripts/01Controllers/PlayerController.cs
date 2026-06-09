@@ -10,6 +10,7 @@ public class PlayerController : MonoBehaviour
     public float dodgeDistance = 2.35f;
     public float dodgeDuration = 0.22f;
     public float dodgeInvulnerability = 0.42f;
+    public bool constrainToArena = true;
 
     [Header("Combat")]
     public int maxHP = 100;
@@ -31,6 +32,9 @@ public class PlayerController : MonoBehaviour
     public int CurrentHP => currentHP;
     public bool IsDodging => isDodging;
     public bool IsInvulnerable => invulnerableUntil > Time.time;
+    public bool IsMoving => inputVector.sqrMagnitude > 0.001f;
+    public bool IsVirtualMoveActive => virtualMoveActive;
+    public Vector2 MoveInput => inputVector;
     public float MissingHpRatio => maxHP <= 0 ? 0f : Mathf.Clamp01((maxHP - currentHP) / (float)maxHP);
     public float HealCooldownRemaining => Mathf.Max(0f, nextHealReadyTime - Time.time);
     public float WhirlwindCooldownRemaining => Mathf.Max(0f, nextWhirlwindReadyTime - Time.time);
@@ -100,6 +104,15 @@ public class PlayerController : MonoBehaviour
             return;
         }
 
+        Vector2 nextPosition = rb.position + inputVector * movementSpeed * Time.fixedDeltaTime;
+        Vector2 clampedPosition = ClampToArena(nextPosition);
+        if ((clampedPosition - nextPosition).sqrMagnitude > 0.0001f)
+        {
+            rb.linearVelocity = Vector2.zero;
+            rb.MovePosition(clampedPosition);
+            return;
+        }
+
         rb.linearVelocity = inputVector * movementSpeed;
     }
 
@@ -138,13 +151,6 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    public void SetVirtualMoveInput(Vector2 virtualInput)
-    {
-        inputVector = Vector2.ClampMagnitude(virtualInput, 1f);
-        actionInputActive = inputVector.sqrMagnitude > 0.001f;
-        RememberDirection(inputVector);
-    }
-
     public void ResetStats()
     {
         ResetStats(true);
@@ -172,12 +178,13 @@ public class PlayerController : MonoBehaviour
             rb.linearVelocity = Vector2.zero;
             if (resetPosition)
             {
-                rb.position = Vector2.zero;
+                rb.position = ClampToArena(Vector2.zero);
             }
         }
         else if (resetPosition)
         {
-            transform.position = Vector3.zero;
+            Vector2 clamped = ClampToArena(Vector2.zero);
+            transform.position = new Vector3(clamped.x, clamped.y, transform.position.z);
         }
 
         OnHpChanged?.Invoke(currentHP, maxHP);
@@ -318,22 +325,29 @@ public class PlayerController : MonoBehaviour
         invulnerableUntil = Time.time + dodgeInvulnerability;
 
         Vector2 start = rb.position;
-        Vector2 end = start + direction * dodgeDistance;
+        Vector2 end = ClampToArena(start + direction * dodgeDistance);
         float elapsed = 0f;
 
         while (elapsed < dodgeDuration)
         {
             float t = Mathf.Clamp01(elapsed / dodgeDuration);
             float eased = 1f - Mathf.Pow(1f - t, 3f);
-            rb.MovePosition(Vector2.Lerp(start, end, eased));
+            rb.MovePosition(ClampToArena(Vector2.Lerp(start, end, eased)));
             elapsed += Time.fixedDeltaTime;
             yield return new WaitForFixedUpdate();
         }
 
-        rb.MovePosition(end);
+        rb.MovePosition(ClampToArena(end));
         rb.linearVelocity = Vector2.zero;
         isDodging = false;
         dodgeRoutine = null;
+    }
+
+    private Vector2 ClampToArena(Vector2 position)
+    {
+        return constrainToArena
+            ? RoguelikeGameManager.ClampToArena(position, RoguelikeGameManager.PlayerArenaPadding)
+            : position;
     }
 
     private void UpdateVisualState()

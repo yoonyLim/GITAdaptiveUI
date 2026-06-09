@@ -8,6 +8,10 @@ using UnityEngine.UI;
 public class RoguelikeGameManager : MonoBehaviour
 {
     public static RoguelikeGameManager Instance;
+    public const float ArenaHalfWidth = 10f;
+    public const float ArenaHalfHeight = 10f;
+    public const float PlayerArenaPadding = 0.72f;
+    public const float EnemyArenaPadding = 0.52f;
 
     [Header("Prefabs")]
     public GameObject meleeEnemyPrefab;
@@ -37,12 +41,14 @@ public class RoguelikeGameManager : MonoBehaviour
     public IReadOnlyList<EnemyControllerBase> ActiveEnemies => activeEnemies;
     public Transform PlayerTransform => playerTransform;
     public PlayerController PlayerController => playerController;
+    public static Rect ArenaBounds => Rect.MinMaxRect(-ArenaHalfWidth, -ArenaHalfHeight, ArenaHalfWidth, ArenaHalfHeight);
 
     private readonly List<EnemyControllerBase> activeEnemies = new List<EnemyControllerBase>();
     private readonly List<StageTelemetry> completedStageData = new List<StageTelemetry>();
     private int currentStage = 1;
     private bool stageRunning;
     private bool isClearingStage;
+    private bool calibrationScenarioActive;
     private bool prototypeComplete;
     private Coroutine autoAdvanceRoutine;
     private GameObject runtimePrefabRoot;
@@ -116,11 +122,24 @@ public class RoguelikeGameManager : MonoBehaviour
         prototypeComplete = false;
         stageRunning = false;
         currentStageData = null;
+        calibrationScenarioActive = false;
 
         SetScreenActive(startScreenRoot, false);
         SetScreenActive(resultScreenRoot, false);
 
         StartStage(startingStage);
+    }
+
+    public static Vector2 ClampToArena(Vector2 position, float padding = 0f)
+    {
+        float safePadding = Mathf.Max(0f, padding);
+        float minX = -ArenaHalfWidth + safePadding;
+        float maxX = ArenaHalfWidth - safePadding;
+        float minY = -ArenaHalfHeight + safePadding;
+        float maxY = ArenaHalfHeight - safePadding;
+        return new Vector2(
+            Mathf.Clamp(position.x, minX, maxX),
+            Mathf.Clamp(position.y, minY, maxY));
     }
 
     public void StartStage(int stageNumber)
@@ -170,6 +189,113 @@ public class RoguelikeGameManager : MonoBehaviour
         StartStage(currentStage + 1);
     }
 
+    public void BeginCalibrationScenario(ADUIContextScenario scenario, bool liveCombat = false)
+    {
+        ResolveReferences();
+        EnsureRuntimeArena();
+        EnsureRuntimePrefabs();
+        ClearEnemiesImmediate();
+
+        calibrationScenarioActive = true;
+        stageRunning = false;
+        prototypeComplete = false;
+        currentStageData = null;
+
+        if (playerController != null)
+        {
+            playerController.ResetStats(true);
+            playerController.ClearVirtualMoveInput();
+        }
+
+        Vector2 playerPosition = playerTransform != null ? playerTransform.position : Vector2.zero;
+        switch (scenario)
+        {
+            case ADUIContextScenario.AttackCommitWindow:
+            case ADUIContextScenario.SafeAttackOpportunity:
+                SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.95f, 0.12f), false, false, true);
+                break;
+            case ADUIContextScenario.AttackOpportunity:
+                SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.75f, 0.15f), false, false, !liveCombat);
+                break;
+            case ADUIContextScenario.PreDodgeWindow:
+                if (playerController != null)
+                {
+                    playerController.SetVirtualMoveInput(new Vector2(0.9f, 0.12f));
+                }
+
+                EnemyControllerBase preDodgeEnemy = SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.72f, 0.24f), false, false, true);
+                preDodgeEnemy?.SetCalibrationAttackReadyIn(0.2f);
+                break;
+            case ADUIContextScenario.RiskyCloseEnemy:
+                EnemyControllerBase riskyEnemy = SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.2f, 0.3f), false, false, true);
+                riskyEnemy?.SetCalibrationAttackReadyIn(0.35f);
+                break;
+            case ADUIContextScenario.ImmediateDodgeThreat:
+                SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.28f, 0.2f), true, false, true);
+                break;
+            case ADUIContextScenario.ProjectileDodgeThreat:
+                SpawnCalibrationEnemy(rangedEnemyPrefab, EnemyKind.Ranged, playerPosition + new Vector2(5.2f, 1.6f), false, false, !liveCombat);
+                SpawnCalibrationProjectile(playerPosition + new Vector2(2.6f, -0.45f), new Vector2(-1f, 0.08f), 0, true);
+                break;
+            case ADUIContextScenario.MovingUnderPressure:
+                if (playerController != null)
+                {
+                    playerController.SetVirtualMoveInput(new Vector2(0.8f, 0.25f));
+                }
+
+                SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.25f, 0.75f), !liveCombat, false, !liveCombat);
+                break;
+            case ADUIContextScenario.DodgeThreat:
+                SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.45f, 0.25f), !liveCombat, false, !liveCombat);
+                SpawnCalibrationProjectile(playerPosition + new Vector2(3.8f, -0.85f), new Vector2(-1f, 0.18f), liveCombat ? 1 : 0);
+                break;
+            case ADUIContextScenario.LowHpHeal:
+                SetCalibrationHp(30);
+                SpawnCalibrationEnemy(rangedEnemyPrefab, EnemyKind.Ranged, playerPosition + new Vector2(5.6f, 2.1f), false, false, !liveCombat);
+                break;
+            case ADUIContextScenario.CrowdWhirlwind:
+                SpawnCalibrationCrowd(playerPosition, false, !liveCombat);
+                break;
+            case ADUIContextScenario.MovementThreat:
+                if (playerController != null)
+                {
+                    playerController.SetVirtualMoveInput(new Vector2(0.8f, 0.25f));
+                }
+
+                SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.65f, 0.75f), false, false, !liveCombat);
+                break;
+            case ADUIContextScenario.LowHpThreat:
+                SetCalibrationHp(25);
+                SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.55f, -0.2f), !liveCombat, false, !liveCombat);
+                SpawnCalibrationProjectile(playerPosition + new Vector2(-3.6f, 0.7f), new Vector2(1f, -0.12f), liveCombat ? 1 : 0);
+                break;
+            case ADUIContextScenario.CrowdLowHp:
+                SetCalibrationHp(30);
+                SpawnCalibrationCrowd(playerPosition, !liveCombat, !liveCombat);
+                break;
+            default:
+                break;
+        }
+
+        UpdateStageUI();
+        CombatManager.Instance?.ForceRefreshCombatContext();
+    }
+
+    public void ClearCalibrationScenario()
+    {
+        if (playerController != null)
+        {
+            playerController.ClearVirtualMoveInput();
+        }
+
+        ClearEnemiesImmediate();
+        calibrationScenarioActive = false;
+        stageRunning = false;
+        currentStageData = null;
+        UpdateStageUI();
+        CombatManager.Instance?.ForceRefreshCombatContext();
+    }
+
     public void NotifyEnemyDefeated(EnemyControllerBase enemy)
     {
         if (enemy == null)
@@ -180,7 +306,7 @@ public class RoguelikeGameManager : MonoBehaviour
         activeEnemies.Remove(enemy);
         UpdateStageUI();
 
-        if (!isClearingStage && activeEnemies.Count == 0 && !prototypeComplete)
+        if (!calibrationScenarioActive && !isClearingStage && activeEnemies.Count == 0 && !prototypeComplete)
         {
             FinishCurrentStage(false);
 
@@ -266,6 +392,110 @@ public class RoguelikeGameManager : MonoBehaviour
         }
     }
 
+    private EnemyControllerBase SpawnCalibrationEnemy(
+        GameObject prefab,
+        EnemyKind fallbackKind,
+        Vector2 position,
+        bool telegraphing,
+        bool attacking,
+        bool freezeAi)
+    {
+        if (prefab == null)
+        {
+            Debug.LogWarning($"Cannot spawn calibration {fallbackKind}: prefab is missing.");
+            return null;
+        }
+
+        if (enemyRoot == null)
+        {
+            enemyRoot = new GameObject("Enemies").transform;
+        }
+
+        GameObject enemyObject = Instantiate(prefab, position, Quaternion.identity, enemyRoot);
+        enemyObject.name = $"Calibration {fallbackKind} Scenario Enemy";
+        enemyObject.SetActive(true);
+
+        EnemyControllerBase enemy = enemyObject.GetComponent<EnemyControllerBase>();
+        if (enemy == null)
+        {
+            enemy = AddControllerForKind(enemyObject, fallbackKind);
+        }
+
+        enemy.Initialize(playerTransform, this, CombatManager.Instance);
+        enemy.ConfigureCalibrationPose(telegraphing, attacking, freezeAi);
+        if (!freezeAi)
+        {
+            enemy.attackDamage = Mathf.Min(enemy.attackDamage, 1);
+            enemy.attackCooldown = Mathf.Max(enemy.attackCooldown, 2.2f);
+        }
+
+        activeEnemies.Add(enemy);
+        return enemy;
+    }
+
+    private void SpawnCalibrationCrowd(Vector2 playerPosition, bool includeThreat, bool freezeAi)
+    {
+        Vector2[] offsets =
+        {
+            new Vector2(1.65f, 0.2f),
+            new Vector2(-1.3f, 0.85f),
+            new Vector2(-0.8f, -1.35f),
+            new Vector2(0.85f, -1.2f)
+        };
+
+        for (int i = 0; i < offsets.Length; i++)
+        {
+            bool telegraphing = includeThreat && i == 0;
+            SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + offsets[i], telegraphing, false, freezeAi);
+        }
+    }
+
+    private void SpawnCalibrationProjectile(Vector2 position, Vector2 direction, int damage, bool holdThreat = false)
+    {
+        GameObject arrow = new GameObject("Calibration Incoming Projectile");
+        arrow.transform.position = position;
+
+        Vector2 safeDirection = direction.sqrMagnitude > 0.001f ? direction.normalized : Vector2.left;
+        arrow.transform.rotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(safeDirection.y, safeDirection.x) * Mathf.Rad2Deg);
+
+        PrototypeVisualFactory.EnsureSpriteRenderer(
+            arrow,
+            PrototypeVisualFactory.SquareSprite,
+            new Color(0.95f, 0.85f, 0.48f, 1f),
+            new Vector2(0.68f, 0.12f),
+            3);
+
+        Rigidbody2D body = arrow.AddComponent<Rigidbody2D>();
+        body.bodyType = RigidbodyType2D.Kinematic;
+        body.gravityScale = 0f;
+
+        BoxCollider2D collider = arrow.AddComponent<BoxCollider2D>();
+        collider.isTrigger = true;
+        collider.size = new Vector2(0.8f, 0.2f);
+
+        EnemyProjectile projectile = arrow.AddComponent<EnemyProjectile>();
+        projectile.speed = holdThreat ? 0.35f : 3.4f;
+        projectile.damage = Mathf.Max(0, damage);
+        projectile.lifetime = holdThreat ? 4.8f : 3.5f;
+        projectile.alwaysThreatening = holdThreat;
+        projectile.SetDirection(safeDirection);
+    }
+
+    private void SetCalibrationHp(int hp)
+    {
+        if (playerController == null)
+        {
+            return;
+        }
+
+        int targetHp = Mathf.Clamp(hp, 1, playerController.maxHP);
+        int damage = Mathf.Max(0, playerController.CurrentHP - targetHp);
+        if (damage > 0)
+        {
+            playerController.TakeDamage(damage);
+        }
+    }
+
     private void ClearEnemies()
     {
         isClearingStage = true;
@@ -280,6 +510,7 @@ public class RoguelikeGameManager : MonoBehaviour
         {
             if (enemy != null)
             {
+                enemy.gameObject.SetActive(false);
                 Destroy(enemy.gameObject);
             }
         }
@@ -288,6 +519,31 @@ public class RoguelikeGameManager : MonoBehaviour
         EnemyProjectile.DestroyAllProjectiles();
         UpdateStageUI();
         StartCoroutine(ReleaseClearingFlag());
+    }
+
+    private void ClearEnemiesImmediate()
+    {
+        isClearingStage = true;
+
+        if (autoAdvanceRoutine != null)
+        {
+            StopCoroutine(autoAdvanceRoutine);
+            autoAdvanceRoutine = null;
+        }
+
+        foreach (EnemyControllerBase enemy in activeEnemies)
+        {
+            if (enemy != null)
+            {
+                enemy.gameObject.SetActive(false);
+                Destroy(enemy.gameObject);
+            }
+        }
+
+        activeEnemies.Clear();
+        EnemyProjectile.DestroyAllProjectiles();
+        isClearingStage = false;
+        UpdateStageUI();
     }
 
     private Vector3 GetSpawnPosition(int index, int count)
@@ -363,7 +619,7 @@ public class RoguelikeGameManager : MonoBehaviour
         controller.moveSpeed = 2.9f;
         controller.attackRange = 1.55f;
         controller.attackCooldown = 1.55f;
-        controller.telegraphDuration = 0.42f;
+        controller.telegraphDuration = 1.1f;
         controller.attackFrameDuration = 0.16f;
         controller.attackDamage = 9;
         controller.normalColor = new Color(0.95f, 0.38f, 0.28f, 1f);
@@ -382,7 +638,7 @@ public class RoguelikeGameManager : MonoBehaviour
         controller.shootingRange = 7f;
         controller.keepAwayDistance = 3.2f;
         controller.attackCooldown = 2.4f;
-        controller.telegraphDuration = 0.62f;
+        controller.telegraphDuration = 1.25f;
         controller.attackFrameDuration = 0.12f;
         controller.attackDamage = 8;
         controller.normalColor = new Color(0.45f, 0.64f, 1f, 1f);
@@ -449,10 +705,10 @@ public class RoguelikeGameManager : MonoBehaviour
             new Vector2(20f, 20f),
             -10);
 
-        CreateArenaLine(arena.transform, "North Border", new Vector2(0f, 10f), new Vector2(20f, 0.14f));
-        CreateArenaLine(arena.transform, "South Border", new Vector2(0f, -10f), new Vector2(20f, 0.14f));
-        CreateArenaLine(arena.transform, "East Border", new Vector2(10f, 0f), new Vector2(0.14f, 20f));
-        CreateArenaLine(arena.transform, "West Border", new Vector2(-10f, 0f), new Vector2(0.14f, 20f));
+        CreateArenaLine(arena.transform, "North Border", new Vector2(0f, ArenaHalfHeight), new Vector2(ArenaHalfWidth * 2f, 0.14f));
+        CreateArenaLine(arena.transform, "South Border", new Vector2(0f, -ArenaHalfHeight), new Vector2(ArenaHalfWidth * 2f, 0.14f));
+        CreateArenaLine(arena.transform, "East Border", new Vector2(ArenaHalfWidth, 0f), new Vector2(0.14f, ArenaHalfHeight * 2f));
+        CreateArenaLine(arena.transform, "West Border", new Vector2(-ArenaHalfWidth, 0f), new Vector2(0.14f, ArenaHalfHeight * 2f));
     }
 
     private void CreateArenaLine(Transform parent, string name, Vector2 position, Vector2 size)
@@ -466,6 +722,9 @@ public class RoguelikeGameManager : MonoBehaviour
             new Color(0.26f, 0.32f, 0.28f, 1f),
             size,
             -8);
+
+        BoxCollider2D collider = line.AddComponent<BoxCollider2D>();
+        collider.size = size;
     }
 
     private IEnumerator AutoAdvanceAfterDelay()

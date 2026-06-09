@@ -44,8 +44,12 @@ public class ADUIFeedbackController : MonoBehaviour
 
         if (policy != null && policy.hapticEnabled && level != ADUIFeedbackLevel.None)
         {
+#if UNITY_ANDROID || UNITY_IOS
             Handheld.Vibrate();
             LastHapticTriggered = true;
+#else
+            LastHapticTriggered = false;
+#endif
         }
     }
 

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -24,6 +25,8 @@ public class AdaptiveTouchManager : MonoBehaviour
         public float prior;
         public float likelihood;
         public float posterior;
+        public int contextSamples;
+        public float contextBlend;
     }
 
     [Header("Visual Buttons (UI Images)")]
@@ -47,6 +50,12 @@ public class AdaptiveTouchManager : MonoBehaviour
     public RectTransform healHitboxVisualizer;
     public RectTransform whirlwindHitboxVisualizer;
 
+    [Header("Gaussian Model Center Markers")]
+    public RectTransform attackModelCenterMarker;
+    public RectTransform dodgeModelCenterMarker;
+    public RectTransform healModelCenterMarker;
+    public RectTransform whirlwindModelCenterMarker;
+
     [Header("Movement Touch Area")]
     public RectTransform movementJoystickTouchArea;
 
@@ -67,15 +76,84 @@ public class AdaptiveTouchManager : MonoBehaviour
     [Range(0.01f, 0.5f)]
     public float minLikelihoodThreshold = 0.05f;
 
+    [Tooltip("Direct button taps only count inside this fraction of the visible circular button. Lower values create more edge-touch misses for the adaptive decoder to resolve.")]
+    [Range(0.45f, 1f)]
+    public float directHitRadiusScale = 0.66f;
+
+    [Tooltip("Caps only the displayed Gaussian helper circle so it does not cover the combat view. The Bayesian model still uses the learned covariance.")]
+    [Range(50f, 240f)]
+    public float maxGaussianVisualizerRadius = 96f;
+
+    [Header("Context-Conditioned Gaussian")]
+    public bool enableContextConditionedGaussian = true;
+    [Range(1f, 12f)]
+    public float contextGaussianMatureSamples = 3f;
+    [Range(0f, 1f)]
+    public float onlineContextGaussianWeight = 0.35f;
+
+    [Header("Decoder Pipeline")]
+    public bool autoCreateDecoderPipeline = true;
+    public bool enableRuntimeLogging = false;
+    public bool collectCalibrationSamples = true;
+    public bool enableOnlineTouchAdaptation = true;
+    public bool saveCalibrationProfileOnComplete = true;
+    public BayesianInputDecoder decoder;
+    public SafetyGate safetyGate;
+    public UserTouchModel userTouchModel;
+    public UserContextPriorModel userContextPriorModel;
+    public ExperimentSessionManager sessionManager;
+    public ConditionManager conditionManager;
+    public TrialScenarioManager trialScenarioManager;
+    public RawTouchLogger rawTouchLogger;
+    public BayesianDecisionLogger decisionLogger;
+    public ButtonLayoutLogger layoutLogger;
+    public HPOutcomeLogger hpOutcomeLogger;
+    public ModePolicyLogger modePolicyLogger;
+    public InteractionDemandModel demandModel;
+    public AdaptiveUIPolicyEngine policyEngine;
+    public AdaptiveUIAdjustmentController adjustmentController;
+    public ADUIFeedbackController feedbackController;
+    public PublicPriorConfig publicPriorConfig;
+
     private Color attackBaseColor;
     private Color dodgeBaseColor;
     private Color healBaseColor;
     private Color whirlwindBaseColor;
     private bool capturedBaseColors;
+    private float recentActionRate = 0.25f;
+    private float lastTouchTime = -1f;
+    private readonly List<Vector2>[] fourButtonCalibrationOffsets = new List<Vector2>[4];
+    private readonly List<float>[] fourButtonCalibrationWeights = new List<float>[4];
+    private readonly List<Vector2>[] fourButtonCenterCalibrationOffsets = new List<Vector2>[4];
+    private readonly List<float>[] fourButtonCenterCalibrationWeights = new List<float>[4];
+    private readonly Vector2[] fourButtonMeanOffsets = new Vector2[4];
+    private readonly float[] fourButtonSpreads = new float[4];
+    private readonly float[] fourButtonCovarianceXX = new float[4];
+    private readonly float[] fourButtonCovarianceYY = new float[4];
+    private readonly float[] fourButtonCovarianceXY = new float[4];
+    private readonly int[] fourButtonSampleCounts = new int[4];
+    private readonly List<Vector2>[,] contextCalibrationOffsets = new List<Vector2>[UserContextPriorModel.ScenarioCount, 4];
+    private readonly List<float>[,] contextCalibrationWeights = new List<float>[UserContextPriorModel.ScenarioCount, 4];
+    private readonly List<Vector2>[,] contextCenterCalibrationOffsets = new List<Vector2>[UserContextPriorModel.ScenarioCount, 4];
+    private readonly List<float>[,] contextCenterCalibrationWeights = new List<float>[UserContextPriorModel.ScenarioCount, 4];
+    private readonly Vector2[,] contextMeanOffsets = new Vector2[UserContextPriorModel.ScenarioCount, 4];
+    private readonly float[,] contextCovarianceXX = new float[UserContextPriorModel.ScenarioCount, 4];
+    private readonly float[,] contextCovarianceYY = new float[UserContextPriorModel.ScenarioCount, 4];
+    private readonly float[,] contextCovarianceXY = new float[UserContextPriorModel.ScenarioCount, 4];
+    private readonly float[,] contextSpreads = new float[UserContextPriorModel.ScenarioCount, 4];
+    private readonly int[,] contextSampleCounts = new int[UserContextPriorModel.ScenarioCount, 4];
+    private readonly int[] fourButtonValidationCounts = new int[4];
+    private readonly int[,] fourButtonValidationConfusion = new int[4, 4];
+    private int fourButtonValidationTotal;
+    private int fourButtonValidationCorrect;
+    private float fourButtonValidationDistanceSum;
+    private bool fourButtonCalibrationActive;
 
     private void Awake()
     {
         EnhancedTouchSupport.Enable();
+        EnsureFourButtonCalibrationStorage();
+        ResetFourButtonCalibration();
         ResolveDecoderPipeline();
     }
 
@@ -84,15 +162,22 @@ public class AdaptiveTouchManager : MonoBehaviour
         CaptureBaseColorsIfNeeded();
 
         CombatManager combatManager = CombatManager.Instance;
-        float attackPrior = combatManager != null ? combatManager.priorAttack : 0.5f;
-        float dodgePrior = combatManager != null ? combatManager.priorDodge : 0.5f;
-        float healPrior = combatManager != null ? combatManager.priorHeal : 0.05f;
-        float whirlwindPrior = combatManager != null ? combatManager.priorWhirlwind : 0.05f;
+        GetAdjustedActionPriors(
+            combatManager,
+            out float attackPrior,
+            out float dodgePrior,
+            out float healPrior,
+            out float whirlwindPrior,
+            out ADUIContextScenario scenario);
 
-        UpdateHitboxVisualizer(attackHitboxVisualizer, CalculateDynamicRadius(attackPrior));
-        UpdateHitboxVisualizer(dodgeHitboxVisualizer, CalculateDynamicRadius(dodgePrior));
-        UpdateHitboxVisualizer(healHitboxVisualizer, CalculateDynamicRadius(healPrior));
-        UpdateHitboxVisualizer(whirlwindHitboxVisualizer, CalculateDynamicRadius(whirlwindPrior));
+        UpdateHitboxVisualizer(attackHitboxVisualizer, CalculateDynamicRadius(Square(GetEffectiveSpread(AdaptiveAction.Attack, scenario)), attackPrior), GetEffectiveOffset(AdaptiveAction.Attack, scenario));
+        UpdateHitboxVisualizer(dodgeHitboxVisualizer, CalculateDynamicRadius(Square(GetEffectiveSpread(AdaptiveAction.Dodge, scenario)), dodgePrior), GetEffectiveOffset(AdaptiveAction.Dodge, scenario));
+        UpdateHitboxVisualizer(healHitboxVisualizer, CalculateDynamicRadius(Square(GetEffectiveSpread(AdaptiveAction.Heal, scenario)), healPrior), GetEffectiveOffset(AdaptiveAction.Heal, scenario));
+        UpdateHitboxVisualizer(whirlwindHitboxVisualizer, CalculateDynamicRadius(Square(GetEffectiveSpread(AdaptiveAction.Whirlwind, scenario)), whirlwindPrior), GetEffectiveOffset(AdaptiveAction.Whirlwind, scenario));
+        UpdateModelCenterMarker(attackModelCenterMarker, AdaptiveAction.Attack);
+        UpdateModelCenterMarker(dodgeModelCenterMarker, AdaptiveAction.Dodge);
+        UpdateModelCenterMarker(healModelCenterMarker, AdaptiveAction.Heal);
+        UpdateModelCenterMarker(whirlwindModelCenterMarker, AdaptiveAction.Whirlwind);
         UpdateSkillCooldownLabels(combatManager);
         UpdateAdaptiveModeVisual();
 
@@ -128,6 +213,11 @@ public class AdaptiveTouchManager : MonoBehaviour
     {
         CaptureBaseColorsIfNeeded();
 
+        if (fourButtonCalibrationActive)
+        {
+            return;
+        }
+
         if (IsInMovementJoystickArea(inputPos))
         {
             return;
@@ -157,12 +247,20 @@ public class AdaptiveTouchManager : MonoBehaviour
             return;
         }
 
+        GetAdjustedActionPriors(
+            combatManager,
+            out float attackPrior,
+            out float dodgePrior,
+            out float healPrior,
+            out float whirlwindPrior,
+            out ADUIContextScenario scenario);
+
         List<ActionCandidate> candidates = new List<ActionCandidate>(4);
 
-        AddCandidate(candidates, AdaptiveAction.Attack, "ATTACK", visualAttackButton, combatManager != null ? combatManager.priorAttack : 0.5f, inputPos);
-        AddCandidate(candidates, AdaptiveAction.Dodge, "DODGE", visualDodgeButton, combatManager != null ? combatManager.priorDodge : 0.5f, inputPos);
-        AddCandidate(candidates, AdaptiveAction.Heal, "HEAL", visualHealButton, combatManager != null ? combatManager.priorHeal : 0.05f, inputPos);
-        AddCandidate(candidates, AdaptiveAction.Whirlwind, "WHIRLWIND", visualWhirlwindButton, combatManager != null ? combatManager.priorWhirlwind : 0.05f, inputPos);
+        AddCandidate(candidates, AdaptiveAction.Attack, "ATTACK", visualAttackButton, attackPrior, inputPos, scenario);
+        AddCandidate(candidates, AdaptiveAction.Dodge, "DODGE", visualDodgeButton, dodgePrior, inputPos, scenario);
+        AddCandidate(candidates, AdaptiveAction.Heal, "HEAL", visualHealButton, healPrior, inputPos, scenario);
+        AddCandidate(candidates, AdaptiveAction.Whirlwind, "WHIRLWIND", visualWhirlwindButton, whirlwindPrior, inputPos, scenario);
 
         if (candidates.Count == 0)
         {
@@ -188,14 +286,29 @@ public class AdaptiveTouchManager : MonoBehaviour
 
         best.image.color = Color.Lerp(GetBaseColor(best.action), pressedColor, 0.55f);
         Debug.Log(
-            $"[Adaptive Touch] {best.label} accepted. Prior={best.prior:F2}, Likelihood={best.likelihood:F2}, Posterior={best.posterior:F3}. {FormatCandidatePosteriors(candidates)}");
+            $"[Adaptive Touch] {best.label} accepted. Scenario={UserContextPriorModel.ScenarioLabel(scenario)}, Prior={best.prior:F2}, Likelihood={best.likelihood:F2}, Posterior={best.posterior:F3}. {FormatCandidatePosteriors(candidates)}");
 
         RecordActionTouch(best.image, inputPos);
-        ExecuteAction(best.action, combatManager);
+        bool executed = ExecuteAction(best.action, combatManager);
+        float posteriorGap = PosteriorGap(candidates, best);
+        if (executed && best.likelihood >= 0.7f)
+        {
+            AddOnlineFourButtonCalibrationSample(best.action, inputPos, 0.12f, scenario);
+        }
+
+        if (executed && posteriorGap >= 0.04f)
+        {
+            userContextPriorModel?.RecordOnlineResponse(scenario, best.action.ToString(), Mathf.Clamp01(best.posterior + posteriorGap));
+        }
     }
 
     private void ProcessInputEnded()
     {
+        if (fourButtonCalibrationActive)
+        {
+            return;
+        }
+
         ResetButtonColor(visualAttackButton, attackBaseColor);
         ResetButtonColor(visualDodgeButton, dodgeBaseColor);
         ResetButtonColor(visualHealButton, healBaseColor);
@@ -208,14 +321,15 @@ public class AdaptiveTouchManager : MonoBehaviour
         string label,
         Image image,
         float prior,
-        Vector2 inputPos)
+        Vector2 inputPos,
+        ADUIContextScenario scenario)
     {
         if (image == null)
         {
             return;
         }
 
-        float likelihood = CalculateGaussianLikelihood(Vector2.Distance(inputPos, image.rectTransform.position), userTouchVariance);
+        float likelihood = CalculateContextAwareGaussianLikelihood(action, scenario, inputPos, image, out int contextSamples, out float contextBlend);
         candidates.Add(new ActionCandidate
         {
             action = action,
@@ -223,8 +337,304 @@ public class AdaptiveTouchManager : MonoBehaviour
             image = image,
             prior = Mathf.Clamp01(prior),
             likelihood = likelihood,
-            posterior = likelihood * Mathf.Clamp01(prior)
+            posterior = likelihood * Mathf.Clamp01(prior),
+            contextSamples = contextSamples,
+            contextBlend = contextBlend
         });
+    }
+
+    private void GetAdjustedActionPriors(
+        CombatManager combatManager,
+        out float attackPrior,
+        out float dodgePrior,
+        out float healPrior,
+        out float whirlwindPrior,
+        out ADUIContextScenario scenario)
+    {
+        attackPrior = combatManager != null ? combatManager.priorAttack : 0.5f;
+        dodgePrior = combatManager != null ? combatManager.priorDodge : 0.5f;
+        healPrior = combatManager != null ? combatManager.priorHeal : 0.05f;
+        whirlwindPrior = combatManager != null ? combatManager.priorWhirlwind : 0.05f;
+        scenario = ADUIContextScenario.General;
+
+        if (userContextPriorModel != null && combatManager != null)
+        {
+            scenario = userContextPriorModel.Classify(combatManager.CurrentContext, combatManager.playerController);
+            userContextPriorModel.ApplyUserPriors(
+                scenario,
+                ref attackPrior,
+                ref dodgePrior,
+                ref healPrior,
+                ref whirlwindPrior);
+        }
+    }
+
+    public void ResetFourButtonCalibration()
+    {
+        EnsureFourButtonCalibrationStorage();
+
+        for (int i = 0; i < fourButtonCalibrationOffsets.Length; i++)
+        {
+            fourButtonCalibrationOffsets[i].Clear();
+            fourButtonCalibrationWeights[i].Clear();
+            fourButtonCenterCalibrationOffsets[i].Clear();
+            fourButtonCenterCalibrationWeights[i].Clear();
+            fourButtonMeanOffsets[i] = Vector2.zero;
+            fourButtonSpreads[i] = userTouchVariance;
+            SetDefaultFourButtonCovariance(i);
+            fourButtonSampleCounts[i] = 0;
+            fourButtonValidationCounts[i] = 0;
+        }
+
+        ResetContextGaussianProfiles();
+
+        for (int row = 0; row < 4; row++)
+        {
+            for (int column = 0; column < 4; column++)
+            {
+                fourButtonValidationConfusion[row, column] = 0;
+            }
+        }
+
+        fourButtonValidationTotal = 0;
+        fourButtonValidationCorrect = 0;
+        fourButtonValidationDistanceSum = 0f;
+        ClearFourButtonCalibrationTarget();
+    }
+
+    public void SetFourButtonCalibrationActive(bool active)
+    {
+        fourButtonCalibrationActive = active;
+        if (!active)
+        {
+            ClearFourButtonCalibrationTarget();
+        }
+    }
+
+    public bool IsTouchNearAction(string actionName, Vector2 screenPosition, float maxDistance)
+    {
+        if (!TryParseAdaptiveAction(actionName, out AdaptiveAction action))
+        {
+            return false;
+        }
+
+        Image image = ImageForAction(action);
+        return image != null &&
+               Vector2.Distance(screenPosition, image.rectTransform.position) <= Mathf.Max(1f, maxDistance);
+    }
+
+    public void AddFourButtonCalibrationSample(string actionName, Vector2 touchPosition, bool affectsCenterBias = true, float sampleWeight = 1f)
+    {
+        AddFourButtonCalibrationSample(actionName, touchPosition, affectsCenterBias, sampleWeight, ADUIContextScenario.General, false);
+    }
+
+    public void AddFourButtonCalibrationSample(
+        string actionName,
+        Vector2 touchPosition,
+        bool affectsCenterBias,
+        float sampleWeight,
+        ADUIContextScenario scenario,
+        bool updateContextProfile)
+    {
+        if (!TryParseAdaptiveAction(actionName, out AdaptiveAction action))
+        {
+            return;
+        }
+
+        Image image = ImageForAction(action);
+        if (image == null)
+        {
+            return;
+        }
+
+        EnsureFourButtonCalibrationStorage();
+
+        int index = ActionIndex(action);
+        Vector3 buttonPosition = image.rectTransform.position;
+        Vector2 buttonCenter = new Vector2(buttonPosition.x, buttonPosition.y);
+        Vector2 offset = touchPosition - buttonCenter;
+        float weight = Mathf.Clamp(sampleWeight, 0.1f, 4f);
+        fourButtonCalibrationOffsets[index].Add(offset);
+        fourButtonCalibrationWeights[index].Add(weight);
+        if (affectsCenterBias)
+        {
+            fourButtonCenterCalibrationOffsets[index].Add(offset);
+            fourButtonCenterCalibrationWeights[index].Add(weight);
+        }
+
+        RecomputeFourButtonProfile(action);
+
+        if (updateContextProfile && enableContextConditionedGaussian)
+        {
+            AddContextGaussianSample(action, scenario, offset, affectsCenterBias, weight);
+        }
+    }
+
+    public string RecordFourButtonCalibrationValidation(string actionName, Vector2 touchPosition, string trialType)
+    {
+        if (!TryParseAdaptiveAction(actionName, out AdaptiveAction targetAction))
+        {
+            return "Validation ignored: unknown action.";
+        }
+
+        if (!TryPredictFourButtonCalibrationAction(touchPosition, out AdaptiveAction predictedAction, out float confidence))
+        {
+            return "Validation ignored: no calibrated buttons.";
+        }
+
+        Image targetImage = ImageForAction(targetAction);
+        float distance = targetImage != null
+            ? Vector2.Distance(touchPosition, targetImage.rectTransform.position)
+            : 0f;
+        int targetIndex = ActionIndex(targetAction);
+        int predictedIndex = ActionIndex(predictedAction);
+        fourButtonValidationCounts[targetIndex]++;
+        fourButtonValidationConfusion[targetIndex, predictedIndex]++;
+        fourButtonValidationTotal++;
+        fourButtonValidationDistanceSum += distance;
+
+        bool correct = predictedAction == targetAction;
+        if (correct)
+        {
+            fourButtonValidationCorrect++;
+        }
+
+        string result = correct ? "OK" : $"MISS->{predictedAction}";
+        string validationLabel = string.IsNullOrEmpty(trialType) ||
+                                 string.Equals(trialType, "validation", System.StringComparison.OrdinalIgnoreCase)
+            ? "pressure"
+            : trialType;
+        Debug.Log(
+            $"[ADUI] Four-button calibration validation {validationLabel}: target={targetAction}, predicted={predictedAction}, confidence={confidence:F2}, distance={distance:F1}");
+        return $"{targetAction} validation {result} conf={confidence:F2}";
+    }
+
+    public int GetFourButtonCalibrationSampleCount(string actionName)
+    {
+        return TryParseAdaptiveAction(actionName, out AdaptiveAction action)
+            ? fourButtonSampleCounts[ActionIndex(action)]
+            : 0;
+    }
+
+    public string FourButtonCalibrationSummary =>
+        $"{CalibrationSummary(AdaptiveAction.Attack)} | {CalibrationSummary(AdaptiveAction.Dodge)} | " +
+        $"{CalibrationSummary(AdaptiveAction.Heal)} | {CalibrationSummary(AdaptiveAction.Whirlwind)}" +
+        ValidationSummarySuffix();
+
+    public string GetFourButtonCalibrationModelState(string actionName, string modelEffect)
+    {
+        if (!TryParseAdaptiveAction(actionName, out AdaptiveAction action))
+        {
+            return "model unavailable";
+        }
+
+        int index = ActionIndex(action);
+        Vector2 offset = fourButtonMeanOffsets[index];
+        string effect = string.IsNullOrEmpty(modelEffect) ? "model" : modelEffect;
+        return $"{effect} dx={offset.x:F0} dy={offset.y:F0} sx={Mathf.Sqrt(fourButtonCovarianceXX[index]):F0} sy={Mathf.Sqrt(fourButtonCovarianceYY[index]):F0}";
+    }
+
+    public string GetFourButtonContextModelState(string actionName, ADUIContextScenario scenario, string modelEffect)
+    {
+        if (!TryParseAdaptiveAction(actionName, out AdaptiveAction action))
+        {
+            return "context model unavailable";
+        }
+
+        int scenarioIndex = ScenarioIndex(scenario);
+        int actionIndex = ActionIndex(action);
+        Vector2 offset = contextMeanOffsets[scenarioIndex, actionIndex];
+        int count = contextSampleCounts[scenarioIndex, actionIndex];
+        float blend = ContextProfileBlend(count);
+        string effect = string.IsNullOrEmpty(modelEffect) ? "context model" : modelEffect;
+        return $"{effect} {UserContextPriorModel.ScenarioLabel(scenario)} {action} n={count} blend={blend:F2} dx={offset.x:F0} dy={offset.y:F0} sx={Mathf.Sqrt(contextCovarianceXX[scenarioIndex, actionIndex]):F0} sy={Mathf.Sqrt(contextCovarianceYY[scenarioIndex, actionIndex]):F0}";
+    }
+
+    public bool TryGetActionButtonCenter(string actionName, out Vector2 center)
+    {
+        center = Vector2.zero;
+        if (!TryParseAdaptiveAction(actionName, out AdaptiveAction action))
+        {
+            return false;
+        }
+
+        Image image = ImageForAction(action);
+        if (image == null)
+        {
+            return false;
+        }
+
+        Vector3 position = image.rectTransform.position;
+        center = new Vector2(position.x, position.y);
+        return true;
+    }
+
+    public bool TryResolveFourButtonAction(Vector2 screenPosition, out string actionName, out float confidence, out bool directHit)
+    {
+        actionName = "";
+        confidence = 0f;
+        directHit = false;
+
+        for (int i = 0; i < 4; i++)
+        {
+            AdaptiveAction action = (AdaptiveAction)i;
+            Image image = ImageForAction(action);
+            if (IsInsideCircularActionButton(image, screenPosition))
+            {
+                actionName = action.ToString();
+                confidence = 1f;
+                directHit = true;
+                return true;
+            }
+        }
+
+        if (TryPredictFourButtonCalibrationAction(screenPosition, out AdaptiveAction predictedAction, out confidence))
+        {
+            actionName = predictedAction.ToString();
+            return confidence >= 0.35f;
+        }
+
+        return false;
+    }
+
+    public bool TryExecuteNamedAction(string actionName, CombatManager combatManager)
+    {
+        return TryParseAdaptiveAction(actionName, out AdaptiveAction action) &&
+               ExecuteAction(action, combatManager);
+    }
+
+    public void SetFourButtonCalibrationTarget(string actionName)
+    {
+        if (!TryParseAdaptiveAction(actionName, out AdaptiveAction action))
+        {
+            return;
+        }
+
+        CaptureBaseColorsIfNeeded();
+        ClearFourButtonCalibrationTarget();
+
+        Image image = ImageForAction(action);
+        if (image == null)
+        {
+            return;
+        }
+
+        Color targetColor = Color.Lerp(GetBaseColor(action), Color.white, 0.42f);
+        targetColor.a = Mathf.Max(0.9f, targetColor.a);
+        image.color = targetColor;
+    }
+
+    public void ClearFourButtonCalibrationTarget()
+    {
+        if (!capturedBaseColors)
+        {
+            return;
+        }
+
+        ResetButtonColor(visualAttackButton, attackBaseColor);
+        ResetButtonColor(visualDodgeButton, dodgeBaseColor);
+        ResetButtonColor(visualHealButton, healBaseColor);
+        ResetButtonColor(visualWhirlwindButton, whirlwindBaseColor);
     }
 
     private bool IsInMovementJoystickArea(Vector2 inputPos)
@@ -271,7 +681,7 @@ public class AdaptiveTouchManager : MonoBehaviour
         Vector2 inputPos,
         CombatManager combatManager)
     {
-        if (image == null || !RectTransformUtility.RectangleContainsScreenPoint(image.rectTransform, inputPos, null))
+        if (!IsInsideCircularActionButton(image, inputPos))
         {
             return false;
         }
@@ -286,8 +696,70 @@ public class AdaptiveTouchManager : MonoBehaviour
 
         image.color = Color.Lerp(GetBaseColor(action), pressedColor, 0.55f);
         Debug.Log($"[Adaptive Touch] {label} direct button tap accepted.");
-        ExecuteAction(action, combatManager);
+        bool executed = ExecuteAction(action, combatManager);
+        if (executed)
+        {
+            if (userContextPriorModel != null && combatManager != null)
+            {
+                ADUIContextScenario scenario = userContextPriorModel.Classify(combatManager.CurrentContext, combatManager.playerController);
+                AddOnlineFourButtonCalibrationSample(action, inputPos, 0.2f, scenario);
+                userContextPriorModel.RecordOnlineResponse(scenario, action.ToString(), 1f);
+            }
+            else
+            {
+                AddOnlineFourButtonCalibrationSample(action, inputPos, 0.2f, ADUIContextScenario.General);
+            }
+        }
+
         return true;
+    }
+
+    private bool IsInsideCircularActionButton(Image image, Vector2 screenPosition)
+    {
+        if (image == null)
+        {
+            return false;
+        }
+
+        RectTransform rectTransform = image.rectTransform;
+        if (RectTransformUtility.ScreenPointToLocalPointInRectangle(rectTransform, screenPosition, null, out Vector2 localPoint))
+        {
+            Rect rect = rectTransform.rect;
+            Vector2 delta = localPoint - rect.center;
+            float radiusScale = Mathf.Clamp(directHitRadiusScale, 0.45f, 1f);
+            float radiusX = Mathf.Max(1f, rect.width * 0.5f * radiusScale);
+            float radiusY = Mathf.Max(1f, rect.height * 0.5f * radiusScale);
+            float normalizedDistance =
+                (delta.x * delta.x) / (radiusX * radiusX) +
+                (delta.y * delta.y) / (radiusY * radiusY);
+            return normalizedDistance <= 1f;
+        }
+
+        float fallbackRadius = Mathf.Max(
+            1f,
+            Mathf.Min(rectTransform.rect.width, rectTransform.rect.height) * 0.5f * Mathf.Clamp(directHitRadiusScale, 0.45f, 1f));
+        return Vector2.Distance(screenPosition, rectTransform.position) <= fallbackRadius;
+    }
+
+    private void AddOnlineFourButtonCalibrationSample(
+        AdaptiveAction action,
+        Vector2 inputPos,
+        float sampleWeight,
+        ADUIContextScenario scenario)
+    {
+        int index = ActionIndex(action);
+        if (!enableOnlineTouchAdaptation || fourButtonSampleCounts[index] <= 0)
+        {
+            return;
+        }
+
+        AddFourButtonCalibrationSample(
+            action.ToString(),
+            inputPos,
+            false,
+            sampleWeight,
+            scenario,
+            true);
     }
 
     private bool IsSkillCoolingDown(AdaptiveAction action, CombatManager combatManager)
@@ -333,40 +805,55 @@ public class AdaptiveTouchManager : MonoBehaviour
         RoguelikeGameManager.Instance.RecordButtonPress(distance);
     }
 
-    private void ExecuteAction(AdaptiveAction action, CombatManager combatManager)
+    private bool ExecuteAction(AdaptiveAction action, CombatManager combatManager)
     {
         if (combatManager == null)
         {
             Debug.LogWarning("AdaptiveTouchManager accepted an action, but no CombatManager is available.");
-            return;
+            return false;
         }
 
         switch (action)
         {
             case AdaptiveAction.Attack:
-                combatManager.OnPlayerAttack();
-                break;
+                return combatManager.OnPlayerAttack();
             case AdaptiveAction.Dodge:
-                combatManager.OnPlayerDodge();
-                break;
+                return combatManager.OnPlayerDodge();
             case AdaptiveAction.Heal:
-                combatManager.OnPlayerHeal();
-                break;
+                return combatManager.OnPlayerHeal();
             case AdaptiveAction.Whirlwind:
-                combatManager.OnPlayerWhirlwind();
-                break;
+                return combatManager.OnPlayerWhirlwind();
         }
+
+        return false;
     }
 
     private string FormatCandidatePosteriors(List<ActionCandidate> candidates)
     {
-        string result = "Posteriors:";
+        string result = "Scores:";
         for (int i = 0; i < candidates.Count; i++)
         {
-            result += $" {candidates[i].label}={candidates[i].posterior:F3}";
+            result +=
+                $" {candidates[i].label}[L={candidates[i].likelihood:F2},P={candidates[i].prior:F2},Post={candidates[i].posterior:F3},ctxN={candidates[i].contextSamples},ctxB={candidates[i].contextBlend:F2}]";
         }
 
         return result;
+    }
+
+    private float PosteriorGap(List<ActionCandidate> candidates, ActionCandidate best)
+    {
+        float runnerUp = 0f;
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            if (candidates[i].label == best.label)
+            {
+                continue;
+            }
+
+            runnerUp = Mathf.Max(runnerUp, candidates[i].posterior);
+        }
+
+        return Mathf.Max(0f, best.posterior - runnerUp);
     }
 
     private void CaptureBaseColorsIfNeeded()
@@ -406,7 +893,7 @@ public class AdaptiveTouchManager : MonoBehaviour
         }
     }
 
-    private void UpdateHitboxVisualizer(RectTransform visualizer, float screenRadius)
+    private void UpdateHitboxVisualizer(RectTransform visualizer, float screenRadius, Vector2 calibratedOffset)
     {
         if (visualizer == null)
         {
@@ -429,8 +916,515 @@ public class AdaptiveTouchManager : MonoBehaviour
         }
 
         float scaleFactor = mainCanvas != null ? Mathf.Max(0.01f, mainCanvas.scaleFactor) : 1f;
-        float uiSize = (screenRadius * 2f) / scaleFactor;
+        float displayRadius = Mathf.Min(screenRadius, Mathf.Max(20f, maxGaussianVisualizerRadius));
+        float uiSize = (displayRadius * 2f) / scaleFactor;
+        visualizer.anchoredPosition = calibratedOffset / scaleFactor;
         visualizer.sizeDelta = new Vector2(uiSize, uiSize);
+
+        Image visualizerImage = visualizer.GetComponent<Image>();
+        if (visualizerImage != null)
+        {
+            Color color = visualizerImage.color;
+            color.a = Mathf.Min(color.a, 0.1f);
+            visualizerImage.color = color;
+        }
+    }
+
+    private void UpdateModelCenterMarker(RectTransform marker, AdaptiveAction action)
+    {
+        if (marker == null)
+        {
+            return;
+        }
+
+        int index = ActionIndex(action);
+        bool shouldShow = adaptiveTouchEnabled && fourButtonSampleCounts[index] > 0;
+        if (marker.gameObject.activeSelf != shouldShow)
+        {
+            marker.gameObject.SetActive(shouldShow);
+        }
+
+        if (!shouldShow)
+        {
+            return;
+        }
+
+        float scaleFactor = mainCanvas != null ? Mathf.Max(0.01f, mainCanvas.scaleFactor) : 1f;
+        marker.anchoredPosition = GetCalibrationOffset(action) / scaleFactor;
+    }
+
+    private void EnsureFourButtonCalibrationStorage()
+    {
+        for (int i = 0; i < fourButtonCalibrationOffsets.Length; i++)
+        {
+            if (fourButtonCalibrationOffsets[i] == null)
+            {
+                fourButtonCalibrationOffsets[i] = new List<Vector2>();
+            }
+
+            if (fourButtonCalibrationWeights[i] == null)
+            {
+                fourButtonCalibrationWeights[i] = new List<float>();
+            }
+
+            if (fourButtonCenterCalibrationOffsets[i] == null)
+            {
+                fourButtonCenterCalibrationOffsets[i] = new List<Vector2>();
+            }
+
+            if (fourButtonCenterCalibrationWeights[i] == null)
+            {
+                fourButtonCenterCalibrationWeights[i] = new List<float>();
+            }
+        }
+
+        for (int scenario = 0; scenario < UserContextPriorModel.ScenarioCount; scenario++)
+        {
+            for (int action = 0; action < 4; action++)
+            {
+                if (contextCalibrationOffsets[scenario, action] == null)
+                {
+                    contextCalibrationOffsets[scenario, action] = new List<Vector2>();
+                }
+
+                if (contextCalibrationWeights[scenario, action] == null)
+                {
+                    contextCalibrationWeights[scenario, action] = new List<float>();
+                }
+
+                if (contextCenterCalibrationOffsets[scenario, action] == null)
+                {
+                    contextCenterCalibrationOffsets[scenario, action] = new List<Vector2>();
+                }
+
+                if (contextCenterCalibrationWeights[scenario, action] == null)
+                {
+                    contextCenterCalibrationWeights[scenario, action] = new List<float>();
+                }
+            }
+        }
+    }
+
+    private bool TryParseAdaptiveAction(string value, out AdaptiveAction action)
+    {
+        action = AdaptiveAction.Attack;
+
+        if (string.Equals(value, "Attack", System.StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "ATTACK", System.StringComparison.OrdinalIgnoreCase))
+        {
+            action = AdaptiveAction.Attack;
+            return true;
+        }
+
+        if (string.Equals(value, "Dodge", System.StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "DODGE", System.StringComparison.OrdinalIgnoreCase))
+        {
+            action = AdaptiveAction.Dodge;
+            return true;
+        }
+
+        if (string.Equals(value, "Heal", System.StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "HEAL", System.StringComparison.OrdinalIgnoreCase))
+        {
+            action = AdaptiveAction.Heal;
+            return true;
+        }
+
+        if (string.Equals(value, "Whirlwind", System.StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "WHIRLWIND", System.StringComparison.OrdinalIgnoreCase))
+        {
+            action = AdaptiveAction.Whirlwind;
+            return true;
+        }
+
+        return false;
+    }
+
+    private Image ImageForAction(AdaptiveAction action)
+    {
+        switch (action)
+        {
+            case AdaptiveAction.Dodge:
+                return visualDodgeButton;
+            case AdaptiveAction.Heal:
+                return visualHealButton;
+            case AdaptiveAction.Whirlwind:
+                return visualWhirlwindButton;
+            default:
+                return visualAttackButton;
+        }
+    }
+
+    private int ActionIndex(AdaptiveAction action)
+    {
+        return (int)action;
+    }
+
+    private Vector2 GetCalibrationOffset(AdaptiveAction action)
+    {
+        int index = ActionIndex(action);
+        return fourButtonSampleCounts[index] > 0 ? fourButtonMeanOffsets[index] : Vector2.zero;
+    }
+
+    private Vector2 GetEffectiveOffset(AdaptiveAction action, ADUIContextScenario scenario)
+    {
+        Vector2 globalOffset = GetCalibrationOffset(action);
+        if (!enableContextConditionedGaussian)
+        {
+            return globalOffset;
+        }
+
+        int scenarioIndex = ScenarioIndex(scenario);
+        int actionIndex = ActionIndex(action);
+        int count = contextSampleCounts[scenarioIndex, actionIndex];
+        if (count <= 0)
+        {
+            return globalOffset;
+        }
+
+        float blend = ContextProfileBlend(count);
+        return Vector2.Lerp(globalOffset, contextMeanOffsets[scenarioIndex, actionIndex], blend);
+    }
+
+    private Vector2 GetCalibratedCenter(AdaptiveAction action, Image image)
+    {
+        Vector3 position = image.rectTransform.position;
+        Vector2 center = new Vector2(position.x, position.y);
+        return center + GetCalibrationOffset(action);
+    }
+
+    private Vector2 GetContextCalibratedCenter(AdaptiveAction action, ADUIContextScenario scenario, Image image)
+    {
+        Vector3 position = image.rectTransform.position;
+        Vector2 center = new Vector2(position.x, position.y);
+        return center + GetEffectiveOffset(action, scenario);
+    }
+
+    private float GetCalibratedSpread(AdaptiveAction action)
+    {
+        int index = ActionIndex(action);
+        return fourButtonSampleCounts[index] > 0
+            ? Mathf.Max(1f, fourButtonSpreads[index])
+            : Mathf.Max(1f, userTouchVariance);
+    }
+
+    private float GetEffectiveSpread(AdaptiveAction action, ADUIContextScenario scenario)
+    {
+        float globalSpread = GetCalibratedSpread(action);
+        if (!enableContextConditionedGaussian)
+        {
+            return globalSpread;
+        }
+
+        int scenarioIndex = ScenarioIndex(scenario);
+        int actionIndex = ActionIndex(action);
+        int count = contextSampleCounts[scenarioIndex, actionIndex];
+        if (count <= 0)
+        {
+            return globalSpread;
+        }
+
+        float blend = ContextProfileBlend(count);
+        float contextSpread = Mathf.Max(1f, contextSpreads[scenarioIndex, actionIndex]);
+        return Mathf.Lerp(globalSpread, contextSpread, blend);
+    }
+
+    private void RecomputeFourButtonProfile(AdaptiveAction action)
+    {
+        int index = ActionIndex(action);
+        List<Vector2> spreadSamples = fourButtonCalibrationOffsets[index];
+        List<float> spreadWeights = fourButtonCalibrationWeights[index];
+        List<Vector2> centerSamples = fourButtonCenterCalibrationOffsets[index];
+        List<float> centerWeights = fourButtonCenterCalibrationWeights[index];
+        fourButtonSampleCounts[index] = spreadSamples.Count;
+
+        Vector2 mean = centerSamples.Count > 0
+            ? WeightedMean(centerSamples, centerWeights)
+            : WeightedMean(spreadSamples, spreadWeights);
+        fourButtonMeanOffsets[index] = ClampOffset(mean);
+
+        if (spreadSamples.Count <= 1)
+        {
+            SetConservativeFourButtonCovariance(index, userTouchVariance * 0.75f);
+            return;
+        }
+
+        float weightSum = 0f;
+        float observedXX = 0f;
+        float observedYY = 0f;
+        float observedXY = 0f;
+        for (int i = 0; i < spreadSamples.Count; i++)
+        {
+            float weight = i < spreadWeights.Count ? Mathf.Clamp(spreadWeights[i], 0.1f, 4f) : 1f;
+            Vector2 delta = spreadSamples[i] - mean;
+            observedXX += weight * delta.x * delta.x;
+            observedYY += weight * delta.y * delta.y;
+            observedXY += weight * delta.x * delta.y;
+            weightSum += weight;
+        }
+
+        float denominator = Mathf.Max(1f, weightSum - 1f);
+        observedXX /= denominator;
+        observedYY /= denominator;
+        observedXY /= denominator;
+
+        float priorStd = Mathf.Max(1f, userTouchVariance * 0.65f);
+        float priorVariance = priorStd * priorStd;
+        float shrink = Mathf.Clamp01(weightSum / (weightSum + 6f));
+        float paddingVariance = 28f * 28f;
+        float xx = Mathf.Lerp(priorVariance, observedXX, shrink) + paddingVariance;
+        float yy = Mathf.Lerp(priorVariance, observedYY, shrink) + paddingVariance;
+        float xy = Mathf.Lerp(0f, observedXY, shrink);
+
+        SetFourButtonCovariance(index, xx, yy, xy);
+    }
+
+    private void AddContextGaussianSample(
+        AdaptiveAction action,
+        ADUIContextScenario scenario,
+        Vector2 offset,
+        bool affectsCenterBias,
+        float weight)
+    {
+        int scenarioIndex = ScenarioIndex(scenario);
+        int actionIndex = ActionIndex(action);
+        contextCalibrationOffsets[scenarioIndex, actionIndex].Add(offset);
+        contextCalibrationWeights[scenarioIndex, actionIndex].Add(weight);
+
+        // Context profiles intentionally learn both spread and directional bias; this is
+        // the P(touch | action, context) term that differs from the global fallback.
+        contextCenterCalibrationOffsets[scenarioIndex, actionIndex].Add(offset);
+        contextCenterCalibrationWeights[scenarioIndex, actionIndex].Add(weight);
+
+        RecomputeContextGaussianProfile(scenarioIndex, actionIndex);
+    }
+
+    private void RecomputeContextGaussianProfile(int scenarioIndex, int actionIndex)
+    {
+        List<Vector2> spreadSamples = contextCalibrationOffsets[scenarioIndex, actionIndex];
+        List<float> spreadWeights = contextCalibrationWeights[scenarioIndex, actionIndex];
+        List<Vector2> centerSamples = contextCenterCalibrationOffsets[scenarioIndex, actionIndex];
+        List<float> centerWeights = contextCenterCalibrationWeights[scenarioIndex, actionIndex];
+        contextSampleCounts[scenarioIndex, actionIndex] = spreadSamples.Count;
+
+        Vector2 mean = centerSamples.Count > 0
+            ? WeightedMean(centerSamples, centerWeights)
+            : WeightedMean(spreadSamples, spreadWeights);
+        contextMeanOffsets[scenarioIndex, actionIndex] = ClampOffset(mean);
+
+        if (spreadSamples.Count <= 1)
+        {
+            SetContextCovariance(scenarioIndex, actionIndex, userTouchVariance * userTouchVariance, userTouchVariance * userTouchVariance, 0f);
+            return;
+        }
+
+        float weightSum = 0f;
+        float observedXX = 0f;
+        float observedYY = 0f;
+        float observedXY = 0f;
+        for (int i = 0; i < spreadSamples.Count; i++)
+        {
+            float weight = i < spreadWeights.Count ? Mathf.Clamp(spreadWeights[i], 0.1f, 4f) : 1f;
+            Vector2 delta = spreadSamples[i] - mean;
+            observedXX += weight * delta.x * delta.x;
+            observedYY += weight * delta.y * delta.y;
+            observedXY += weight * delta.x * delta.y;
+            weightSum += weight;
+        }
+
+        float denominator = Mathf.Max(1f, weightSum - 1f);
+        observedXX /= denominator;
+        observedYY /= denominator;
+        observedXY /= denominator;
+
+        float priorStd = Mathf.Max(1f, userTouchVariance * 0.85f);
+        float priorVariance = priorStd * priorStd;
+        float shrink = Mathf.Clamp01(weightSum / (weightSum + 3.5f));
+        float paddingVariance = 22f * 22f;
+        float xx = Mathf.Lerp(priorVariance, observedXX, shrink) + paddingVariance;
+        float yy = Mathf.Lerp(priorVariance, observedYY, shrink) + paddingVariance;
+        float xy = Mathf.Lerp(0f, observedXY, shrink);
+
+        SetContextCovariance(scenarioIndex, actionIndex, xx, yy, xy);
+    }
+
+    private void SetContextCovariance(int scenarioIndex, int actionIndex, float xx, float yy, float xy)
+    {
+        float minStd = 48f;
+        float maxStd = Mathf.Max(minStd, userTouchVariance * 2.15f);
+        float minVariance = minStd * minStd;
+        float maxVariance = maxStd * maxStd;
+
+        xx = Mathf.Clamp(xx, minVariance, maxVariance);
+        yy = Mathf.Clamp(yy, minVariance, maxVariance);
+
+        float maxAbsXY = Mathf.Sqrt(xx * yy) * 0.72f;
+        xy = Mathf.Clamp(xy, -maxAbsXY, maxAbsXY);
+
+        if (xx * yy - xy * xy < minVariance * minVariance * 0.25f)
+        {
+            xy = 0f;
+        }
+
+        contextCovarianceXX[scenarioIndex, actionIndex] = xx;
+        contextCovarianceYY[scenarioIndex, actionIndex] = yy;
+        contextCovarianceXY[scenarioIndex, actionIndex] = xy;
+
+        float trace = xx + yy;
+        float discriminant = Mathf.Sqrt(Mathf.Max(0f, (xx - yy) * (xx - yy) + 4f * xy * xy));
+        float maxEigenvalue = Mathf.Max(minVariance, (trace + discriminant) * 0.5f);
+        contextSpreads[scenarioIndex, actionIndex] = Mathf.Sqrt(maxEigenvalue);
+    }
+
+    private void ResetContextGaussianProfiles()
+    {
+        for (int scenario = 0; scenario < UserContextPriorModel.ScenarioCount; scenario++)
+        {
+            for (int action = 0; action < 4; action++)
+            {
+                contextCalibrationOffsets[scenario, action].Clear();
+                contextCalibrationWeights[scenario, action].Clear();
+                contextCenterCalibrationOffsets[scenario, action].Clear();
+                contextCenterCalibrationWeights[scenario, action].Clear();
+                contextMeanOffsets[scenario, action] = Vector2.zero;
+                contextSampleCounts[scenario, action] = 0;
+                SetContextCovariance(scenario, action, userTouchVariance * userTouchVariance, userTouchVariance * userTouchVariance, 0f);
+            }
+        }
+    }
+
+    private int ScenarioIndex(ADUIContextScenario scenario)
+    {
+        return Mathf.Clamp((int)scenario, 0, UserContextPriorModel.ScenarioCount - 1);
+    }
+
+    private float ContextProfileBlend(int sampleCount)
+    {
+        return Mathf.Clamp01(sampleCount / Mathf.Max(0.001f, sampleCount + contextGaussianMatureSamples));
+    }
+
+    private Vector2 WeightedMean(List<Vector2> samples, List<float> weights)
+    {
+        if (samples == null || samples.Count == 0)
+        {
+            return Vector2.zero;
+        }
+
+        Vector2 sum = Vector2.zero;
+        float weightSum = 0f;
+        for (int i = 0; i < samples.Count; i++)
+        {
+            float weight = weights != null && i < weights.Count ? Mathf.Clamp(weights[i], 0.1f, 4f) : 1f;
+            sum += samples[i] * weight;
+            weightSum += weight;
+        }
+
+        return weightSum > 0f ? sum / weightSum : Vector2.zero;
+    }
+
+    private Vector2 ClampOffset(Vector2 offset)
+    {
+        float maxOffset = Mathf.Max(24f, userTouchVariance * 0.6f);
+        return offset.magnitude > maxOffset ? offset.normalized * maxOffset : offset;
+    }
+
+    private string CalibrationSummary(AdaptiveAction action)
+    {
+        int index = ActionIndex(action);
+        Vector2 offset = fourButtonMeanOffsets[index];
+        return $"{action} n={fourButtonSampleCounts[index]} dx={offset.x:F0} dy={offset.y:F0} sx={Mathf.Sqrt(fourButtonCovarianceXX[index]):F0} sy={Mathf.Sqrt(fourButtonCovarianceYY[index]):F0}";
+    }
+
+    private string ValidationSummarySuffix()
+    {
+        if (fourButtonValidationTotal <= 0)
+        {
+            return string.Empty;
+        }
+
+        float accuracy = (float)fourButtonValidationCorrect / Mathf.Max(1, fourButtonValidationTotal);
+        float meanDistance = fourButtonValidationDistanceSum / Mathf.Max(1, fourButtonValidationTotal);
+        return $" | val={fourButtonValidationCorrect}/{fourButtonValidationTotal} ({accuracy:P0}) d={meanDistance:F0}";
+    }
+
+    private float Square(float value)
+    {
+        return value * value;
+    }
+
+    private void SetDefaultFourButtonCovariance(int index)
+    {
+        float std = Mathf.Max(1f, userTouchVariance);
+        SetFourButtonCovariance(index, std * std, std * std, 0f);
+    }
+
+    private void SetConservativeFourButtonCovariance(int index, float std)
+    {
+        float clampedStd = Mathf.Clamp(std, 60f, Mathf.Max(60f, userTouchVariance * 1.9f));
+        float variance = clampedStd * clampedStd;
+        SetFourButtonCovariance(index, variance, variance, 0f);
+    }
+
+    private void SetFourButtonCovariance(int index, float xx, float yy, float xy)
+    {
+        float minStd = 58f;
+        float maxStd = Mathf.Max(minStd, userTouchVariance * 1.9f);
+        float minVariance = minStd * minStd;
+        float maxVariance = maxStd * maxStd;
+
+        xx = Mathf.Clamp(xx, minVariance, maxVariance);
+        yy = Mathf.Clamp(yy, minVariance, maxVariance);
+
+        float maxAbsXY = Mathf.Sqrt(xx * yy) * 0.65f;
+        xy = Mathf.Clamp(xy, -maxAbsXY, maxAbsXY);
+
+        if (xx * yy - xy * xy < minVariance * minVariance * 0.25f)
+        {
+            xy = 0f;
+        }
+
+        fourButtonCovarianceXX[index] = xx;
+        fourButtonCovarianceYY[index] = yy;
+        fourButtonCovarianceXY[index] = xy;
+
+        float trace = xx + yy;
+        float discriminant = Mathf.Sqrt(Mathf.Max(0f, (xx - yy) * (xx - yy) + 4f * xy * xy));
+        float maxEigenvalue = Mathf.Max(minVariance, (trace + discriminant) * 0.5f);
+        fourButtonSpreads[index] = Mathf.Sqrt(maxEigenvalue);
+    }
+
+    private bool TryPredictFourButtonCalibrationAction(Vector2 inputPos, out AdaptiveAction predictedAction, out float confidence)
+    {
+        predictedAction = AdaptiveAction.Attack;
+        confidence = 0f;
+        float bestLikelihood = -1f;
+        float totalLikelihood = 0f;
+
+        for (int i = 0; i < 4; i++)
+        {
+            AdaptiveAction action = (AdaptiveAction)i;
+            Image image = ImageForAction(action);
+            if (image == null)
+            {
+                continue;
+            }
+
+            float likelihood = CalculateCalibratedGaussianLikelihood(action, inputPos, image);
+            totalLikelihood += likelihood;
+            if (likelihood > bestLikelihood)
+            {
+                bestLikelihood = likelihood;
+                predictedAction = action;
+            }
+        }
+
+        if (bestLikelihood < 0f)
+        {
+            return false;
+        }
+
+        confidence = totalLikelihood > 0f ? bestLikelihood / totalLikelihood : 0f;
+        return true;
     }
 
     private void UpdateAdaptiveModeVisual()
@@ -469,46 +1463,81 @@ public class AdaptiveTouchManager : MonoBehaviour
         }
     }
 
-    private float CalculateGaussianLikelihood(float distance, float variance)
+    private float CalculateCalibratedGaussianLikelihood(AdaptiveAction action, Vector2 inputPos, Image image)
     {
-        switch (condition)
+        if (image == null)
         {
-            case DatasetSchema.ConditionVisualBoundary:
-                result.finalExecutedAction = result.visualBoundaryPrediction;
-                result.invalidTouch = result.finalExecutedAction == ADUIAction.None;
-                result.safetyGatePassed = false;
-                result.safetyGateReason = "visual_boundary_baseline";
-                return result;
-
-            case DatasetSchema.ConditionExpandedHitbox:
-                result.finalExecutedAction = result.expandedHitboxPrediction;
-                result.invalidTouch = result.finalExecutedAction == ADUIAction.None;
-                result.safetyGatePassed = false;
-                result.safetyGateReason = "expanded_hitbox_baseline";
-                return result;
-
-            case DatasetSchema.ConditionUserGaussian:
-                result.finalExecutedAction = result.invalidTouch ? ADUIAction.None : result.userGaussianPrediction;
-                result.safetyGatePassed = false;
-                result.safetyGateReason = "user_gaussian_baseline";
-                return result;
-
-            case DatasetSchema.ConditionContextPriorOnly:
-                result.finalExecutedAction = result.invalidTouch ? ADUIAction.None : result.contextPriorOnlyPrediction;
-                result.safetyGatePassed = false;
-                result.safetyGateReason = "context_prior_only_baseline";
-                return result;
-
-            case DatasetSchema.ConditionContextBayesianNoSafety:
-                result.finalExecutedAction = result.invalidTouch ? ADUIAction.None : result.bayesianPrediction;
-                result.safetyGatePassed = false;
-                result.safetyGateReason = "context_bayesian_no_safety";
-                return result;
-
-            case DatasetSchema.ConditionContextBayesianSafety:
-            default:
-                return safetyGate != null ? safetyGate.Apply(input, result) : result;
+            return 0f;
         }
+
+        int index = ActionIndex(action);
+        Vector2 center = GetCalibratedCenter(action, image);
+        return CalculateGaussianLikelihood(
+            inputPos,
+            center,
+            fourButtonCovarianceXX[index],
+            fourButtonCovarianceYY[index],
+            fourButtonCovarianceXY[index]);
+    }
+
+    private float CalculateContextAwareGaussianLikelihood(
+        AdaptiveAction action,
+        ADUIContextScenario scenario,
+        Vector2 inputPos,
+        Image image,
+        out int contextSamples,
+        out float contextBlend)
+    {
+        contextSamples = 0;
+        contextBlend = 0f;
+        float globalLikelihood = CalculateCalibratedGaussianLikelihood(action, inputPos, image);
+
+        if (!enableContextConditionedGaussian || image == null)
+        {
+            return globalLikelihood;
+        }
+
+        int scenarioIndex = ScenarioIndex(scenario);
+        int actionIndex = ActionIndex(action);
+        contextSamples = contextSampleCounts[scenarioIndex, actionIndex];
+        if (contextSamples <= 0)
+        {
+            return globalLikelihood;
+        }
+
+        contextBlend = ContextProfileBlend(contextSamples);
+        Vector2 contextCenter = GetContextCalibratedCenter(action, scenario, image);
+        float contextLikelihood = CalculateGaussianLikelihood(
+            inputPos,
+            contextCenter,
+            contextCovarianceXX[scenarioIndex, actionIndex],
+            contextCovarianceYY[scenarioIndex, actionIndex],
+            contextCovarianceXY[scenarioIndex, actionIndex]);
+
+        return Mathf.Lerp(globalLikelihood, contextLikelihood, contextBlend);
+    }
+
+    private float CalculateGaussianLikelihood(Vector2 inputPos, Vector2 center, float covarianceXX, float covarianceYY, float covarianceXY)
+    {
+        Vector2 delta = inputPos - center;
+        float xx = Mathf.Max(1f, covarianceXX);
+        float yy = Mathf.Max(1f, covarianceYY);
+        float xy = covarianceXY;
+        float determinant = xx * yy - xy * xy;
+        if (determinant <= 1f)
+        {
+            float std = Mathf.Max(1f, userTouchVariance);
+            float distance = delta.magnitude;
+            return Mathf.Exp(-(distance * distance) / (2f * std * std));
+        }
+
+        float mahalanobisSquared = (yy * delta.x * delta.x - 2f * xy * delta.x * delta.y + xx * delta.y * delta.y) / determinant;
+        mahalanobisSquared = Mathf.Clamp(mahalanobisSquared, 0f, 80f);
+
+        float likelihood = Mathf.Exp(-0.5f * mahalanobisSquared);
+        float baselineVariance = Mathf.Max(1f, userTouchVariance * userTouchVariance);
+        float peakPenalty = Mathf.Clamp(baselineVariance / Mathf.Sqrt(determinant), 0.35f, 1f);
+        return Mathf.Clamp01(likelihood * peakPenalty);
     }
 
     private void ExecuteDecodedAction(ADUIAction action, CombatManager combatManager)

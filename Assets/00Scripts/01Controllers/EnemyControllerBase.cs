@@ -32,9 +32,11 @@ public abstract class EnemyControllerBase : MonoBehaviour
 
     public int CurrentHP => currentHP;
     public bool IsAlive => currentHP > 0;
+    public bool IsCalibrationScenarioEnemy { get; private set; }
     public bool IsTelegraphing { get; protected set; }
     public bool IsAttacking { get; protected set; }
     public float DistanceToPlayer { get; protected set; } = float.MaxValue;
+    public float TimeUntilAttackReady => Mathf.Max(0f, nextAttackTime - Time.time);
     public Transform PlayerTransform => playerTransform;
 
     protected Transform playerTransform;
@@ -49,6 +51,7 @@ public abstract class EnemyControllerBase : MonoBehaviour
     private readonly List<GameObject> spawnedTelegraphs = new List<GameObject>();
     private Coroutine flashRoutine;
     private bool deathNotified;
+    private bool calibrationAiFrozen;
 
     protected virtual void Awake()
     {
@@ -69,12 +72,59 @@ public abstract class EnemyControllerBase : MonoBehaviour
         playerController = playerTransform ? playerTransform.GetComponent<PlayerController>() : null;
         gameManager = owner;
         combatManager = combat;
+        IsCalibrationScenarioEnemy = false;
+        calibrationAiFrozen = false;
         currentHP = maxHP;
         deathNotified = false;
         nextAttackTime = Time.time + Random.Range(0.15f, 0.75f);
         DistanceToPlayer = playerTransform ? Vector2.Distance(transform.position, playerTransform.position) : float.MaxValue;
         EnsureBaseVisual();
         SetBodyColor(normalColor);
+    }
+
+    public void ConfigureCalibrationPose(bool telegraphing, bool attacking, bool freezeAi = true)
+    {
+        IsCalibrationScenarioEnemy = true;
+        currentHP = Mathf.Max(1, maxHP);
+        deathNotified = false;
+
+        IsTelegraphing = telegraphing;
+        IsAttacking = attacking;
+        calibrationAiFrozen = freezeAi;
+
+        if (freezeAi)
+        {
+            moveSpeed = 0f;
+            attackDamage = 0;
+            nextAttackTime = Time.time + 999f;
+        }
+
+        if (IsAttacking)
+        {
+            SetBodyColor(attackColor);
+        }
+        else if (IsTelegraphing)
+        {
+            SetBodyColor(telegraphColor);
+        }
+        else
+        {
+            SetBodyColor(normalColor);
+        }
+
+        RefreshDistanceToPlayer();
+    }
+
+    public void SetCalibrationAttackReadyIn(float seconds)
+    {
+        IsCalibrationScenarioEnemy = true;
+        nextAttackTime = Time.time + Mathf.Max(0f, seconds);
+    }
+
+    public void RefreshDistanceToPlayer()
+    {
+        ResolvePlayerIfNeeded();
+        DistanceToPlayer = playerTransform ? Vector2.Distance(transform.position, playerTransform.position) : float.MaxValue;
     }
 
     protected virtual void Update()
@@ -92,6 +142,11 @@ public abstract class EnemyControllerBase : MonoBehaviour
 
         DistanceToPlayer = Vector2.Distance(transform.position, playerTransform.position);
         FacePlayer();
+        if (calibrationAiFrozen)
+        {
+            return;
+        }
+
         TickBehavior();
     }
 
@@ -152,7 +207,7 @@ public abstract class EnemyControllerBase : MonoBehaviour
         }
 
         float dangerRange = Mathf.Max(attackRange + 0.75f, 0.1f);
-        if (DistanceToPlayer <= dangerRange)
+        if (enemyKind != EnemyKind.Ranged && DistanceToPlayer <= dangerRange)
         {
             score += Mathf.Lerp(1.4f, 0.2f, DistanceToPlayer / dangerRange);
         }
@@ -163,6 +218,14 @@ public abstract class EnemyControllerBase : MonoBehaviour
     protected bool CanStartAttack()
     {
         return Time.time >= nextAttackTime && !IsTelegraphing && !IsAttacking;
+    }
+
+    public bool CanStartAttackSoon(float windowSeconds)
+    {
+        return IsAlive &&
+               !IsTelegraphing &&
+               !IsAttacking &&
+               TimeUntilAttackReady <= Mathf.Max(0f, windowSeconds);
     }
 
     protected Vector2 DirectionToPlayer()
@@ -245,6 +308,8 @@ public abstract class EnemyControllerBase : MonoBehaviour
 
     private void MoveTo(Vector2 nextPosition)
     {
+        nextPosition = RoguelikeGameManager.ClampToArena(nextPosition, RoguelikeGameManager.EnemyArenaPadding);
+
         if (rb != null)
         {
             rb.MovePosition(nextPosition);

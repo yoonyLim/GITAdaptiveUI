@@ -6,11 +6,15 @@ using UnityEngine.UI;
 
 public class AdaptivePrototypeBootstrap : MonoBehaviour
 {
+    private const float ActionButtonSize = 124f;
+    private const float ActionButtonHitboxSize = 148f;
+    private const float ActionButtonLabelWidth = 116f;
+
     public bool buildOnAwake = true;
 
     [Header("Startup Flow")]
-    public bool startGameOnPlay = true;
-    public bool runCalibrationBeforeGame;
+    public bool startGameOnPlay = false;
+    public bool runCalibrationBeforeGame = true;
     public int gameStartStage = 1;
 
     [Header("Calibration Counts")]
@@ -32,8 +36,9 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
 
     public void BuildPrototypeScene()
     {
-        CreateCameraIfNeeded();
+        Camera mainCamera = CreateCameraIfNeeded();
         PlayerController player = CreatePlayerIfNeeded();
+        ConfigureCameraFollow(mainCamera, player.transform);
         Canvas canvas = CreateCanvas();
         CreateEventSystemIfNeeded();
 
@@ -43,16 +48,17 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         TextMeshProUGUI enemyText = CreateText(canvas.transform, "Enemy Context Text", "Enemies", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(300f, -152f), new Vector2(560f, 34f), 18, TextAlignmentOptions.Left);
         TextMeshProUGUI priorText = CreateText(canvas.transform, "Prior Text", "P(A) 50%   P(D) 50%   P(H) 0%   P(W) 0%", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(405f, -188f), new Vector2(780f, 34f), 18, TextAlignmentOptions.Left);
         TextMeshProUGUI contextText = CreateText(canvas.transform, "Detailed Context Text", "Closest: None", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(520f, -224f), new Vector2(1000f, 34f), 17, TextAlignmentOptions.Left);
-        TextMeshProUGUI feedbackText = CreateText(canvas.transform, "Feedback Text", string.Empty, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 52f), new Vector2(700f, 42f), 22, TextAlignmentOptions.Center);
+        TextMeshProUGUI feedbackText = CreateText(canvas.transform, "Feedback Text", string.Empty, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 70f), new Vector2(920f, 88f), 20, TextAlignmentOptions.Center);
+        feedbackText.textWrappingMode = TextWrappingModes.Normal;
 
-        Image attackImage = CreateActionButton(canvas.transform, "Attack Button", "Attack", new Vector2(1f, 0f), new Vector2(-150f, 150f), new Color(0.95f, 0.22f, 0.18f, 0.88f), out RectTransform attackHitbox, out _);
-        Image dodgeImage = CreateActionButton(canvas.transform, "Dodge Button", "Dodge", new Vector2(1f, 0f), new Vector2(-370f, 150f), new Color(0.12f, 0.58f, 1f, 0.88f), out RectTransform dodgeHitbox, out _);
-        Image healImage = CreateActionButton(canvas.transform, "Heal Button", "Heal", new Vector2(1f, 0f), new Vector2(-150f, 370f), new Color(0.18f, 0.78f, 0.38f, 0.88f), out RectTransform healHitbox, out TextMeshProUGUI healLabel);
-        Image whirlwindImage = CreateActionButton(canvas.transform, "Whirlwind Button", "Whirlwind", new Vector2(1f, 0f), new Vector2(-370f, 370f), new Color(1f, 0.68f, 0.12f, 0.88f), out RectTransform whirlwindHitbox, out TextMeshProUGUI whirlwindLabel);
+        Image attackImage = CreateActionButton(canvas.transform, "Attack Button", "Attack", new Vector2(1f, 0f), new Vector2(-126f, 126f), new Color(0.95f, 0.22f, 0.18f, 0.88f), out RectTransform attackHitbox, out RectTransform attackModelMarker, out _);
+        Image dodgeImage = CreateActionButton(canvas.transform, "Dodge Button", "Dodge", new Vector2(1f, 0f), new Vector2(-292f, 126f), new Color(0.12f, 0.58f, 1f, 0.88f), out RectTransform dodgeHitbox, out RectTransform dodgeModelMarker, out _);
+        Image healImage = CreateActionButton(canvas.transform, "Heal Button", "Heal", new Vector2(1f, 0f), new Vector2(-126f, 292f), new Color(0.18f, 0.78f, 0.38f, 0.88f), out RectTransform healHitbox, out RectTransform healModelMarker, out TextMeshProUGUI healLabel);
+        Image whirlwindImage = CreateActionButton(canvas.transform, "Whirlwind Button", "Whirlwind", new Vector2(1f, 0f), new Vector2(-292f, 292f), new Color(1f, 0.68f, 0.12f, 0.88f), out RectTransform whirlwindHitbox, out RectTransform whirlwindModelMarker, out TextMeshProUGUI whirlwindLabel);
         RectTransform joystickTouchArea = CreateMovementJoystick(canvas.transform, player);
         Button skipButton = CreateSkipButton(canvas.transform);
         Image adaptiveToggleImage = CreateAdaptiveToggleButton(canvas.transform, out TextMeshProUGUI adaptiveToggleLabel);
-        GameObject startScreen = CreateStartScreen(canvas.transform, out Button startButton);
+        GameObject startScreen = CreateStartScreen(canvas.transform, out Button calibrationStartButton, out Button startButton);
         GameObject resultScreen = CreateResultScreen(canvas.transform, out TextMeshProUGUI resultText, out Button restartButton);
 
         GameObject managerObject = new GameObject("Game Manager");
@@ -64,6 +70,7 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         ConditionManager conditionManager = managerObject.AddComponent<ConditionManager>();
         TrialScenarioManager trialScenarioManager = managerObject.AddComponent<TrialScenarioManager>();
         UserTouchModel userTouchModel = managerObject.AddComponent<UserTouchModel>();
+        UserContextPriorModel userContextPriorModel = managerObject.AddComponent<UserContextPriorModel>();
         BayesianInputDecoder decoder = managerObject.AddComponent<BayesianInputDecoder>();
         SafetyGate safetyGate = managerObject.AddComponent<SafetyGate>();
         RawTouchLogger rawTouchLogger = managerObject.AddComponent<RawTouchLogger>();
@@ -84,6 +91,8 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         gameManager.resultScreenRoot = resultScreen;
         gameManager.stageText = stageText;
         gameManager.resultText = resultText;
+        gameManager.startStageOnPlay = startGameOnPlay && !runCalibrationBeforeGame;
+        gameManager.startingStage = gameStartStage;
 
         combatManager.gameManager = gameManager;
         combatManager.playerController = player;
@@ -121,16 +130,39 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         touchManager.dodgeHitboxVisualizer = dodgeHitbox;
         touchManager.healHitboxVisualizer = healHitbox;
         touchManager.whirlwindHitboxVisualizer = whirlwindHitbox;
+        touchManager.attackModelCenterMarker = attackModelMarker;
+        touchManager.dodgeModelCenterMarker = dodgeModelMarker;
+        touchManager.healModelCenterMarker = healModelMarker;
+        touchManager.whirlwindModelCenterMarker = whirlwindModelMarker;
+        touchManager.userContextPriorModel = userContextPriorModel;
         touchManager.movementJoystickTouchArea = joystickTouchArea;
         touchManager.adaptiveToggleButton = adaptiveToggleImage;
         touchManager.adaptiveToggleLabel = adaptiveToggleLabel;
+
+        FourButtonCalibrationFlow calibrationFlow = managerObject.AddComponent<FourButtonCalibrationFlow>();
+        calibrationFlow.touchManager = touchManager;
+        calibrationFlow.contextPriorModel = userContextPriorModel;
+        calibrationFlow.gameManager = gameManager;
+        calibrationFlow.startScreenRoot = startScreen;
+        calibrationFlow.startButton = calibrationStartButton;
+        calibrationFlow.noCalibrationStartButton = startButton;
+        calibrationFlow.stageText = stageText;
+        calibrationFlow.feedbackText = feedbackText;
+        calibrationFlow.warmupTapsPerButton = 1;
+        calibrationFlow.centerTapsPerButton = Mathf.Clamp(centerTapsPerButton, 4, 8);
+        calibrationFlow.edgeTapsPerButton = Mathf.Clamp(boundaryTapsPerButton, 2, 4);
+        calibrationFlow.transitionTapsPerButton = Mathf.Clamp(Mathf.CeilToInt(reciprocalAlternationPairs / 4f), 1, 4);
+        calibrationFlow.joystickStressTapsPerButton = Mathf.Clamp(Mathf.CeilToInt(contextTapsPerState / 2f), 1, 4);
+        calibrationFlow.validationTapsPerButton = Mathf.Clamp(ambiguousTapsPerButton, 2, 4);
+
+        AttachCommandLineRecorderIfRequested();
     }
 
-    private void CreateCameraIfNeeded()
+    private Camera CreateCameraIfNeeded()
     {
         if (Camera.main != null)
         {
-            return;
+            return Camera.main;
         }
 
         GameObject cameraObject = new GameObject("Main Camera");
@@ -139,11 +171,28 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
 
         Camera camera = cameraObject.AddComponent<Camera>();
         camera.orthographic = true;
-        camera.orthographicSize = 7.2f;
+        camera.orthographicSize = 5.4f;
         camera.backgroundColor = new Color(0.06f, 0.08f, 0.08f, 1f);
         camera.clearFlags = CameraClearFlags.SolidColor;
 
         cameraObject.AddComponent<AudioListener>();
+        return camera;
+    }
+
+    private void ConfigureCameraFollow(Camera mainCamera, Transform playerTransform)
+    {
+        if (mainCamera == null || playerTransform == null)
+        {
+            return;
+        }
+
+        TopDownCameraFollow follow = mainCamera.GetComponent<TopDownCameraFollow>();
+        if (follow == null)
+        {
+            follow = mainCamera.gameObject.AddComponent<TopDownCameraFollow>();
+        }
+
+        follow.SetTarget(playerTransform);
     }
 
     private PlayerController CreatePlayerIfNeeded()
@@ -198,23 +247,33 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         Vector2 anchoredPosition,
         Color color,
         out RectTransform hitbox,
+        out RectTransform modelCenterMarker,
         out TextMeshProUGUI labelText)
     {
-        RectTransform buttonTransform = CreateRectTransform(name, parent, anchor, anchor, anchoredPosition, new Vector2(160f, 160f));
+        RectTransform buttonTransform = CreateRectTransform(name, parent, anchor, anchor, anchoredPosition, new Vector2(ActionButtonSize, ActionButtonSize));
         Image image = buttonTransform.gameObject.AddComponent<Image>();
-        image.sprite = PrototypeVisualFactory.SquareSprite;
+        image.sprite = PrototypeVisualFactory.CircleSprite;
         image.color = color;
         image.raycastTarget = false;
+        image.preserveAspect = true;
 
-        hitbox = CreateRectTransform(name + " Hitbox", buttonTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(200f, 200f));
+        hitbox = CreateRectTransform(name + " Hitbox", buttonTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(ActionButtonHitboxSize, ActionButtonHitboxSize));
         Image hitboxImage = hitbox.gameObject.AddComponent<Image>();
         hitboxImage.sprite = PrototypeVisualFactory.CircleSprite;
-        hitboxImage.color = new Color(color.r, color.g, color.b, 0.18f);
+        hitboxImage.color = new Color(color.r, color.g, color.b, 0.1f);
         hitboxImage.raycastTarget = false;
 
-        labelText = CreateText(buttonTransform, label + " Text", label, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(150f, 48f), 24, TextAlignmentOptions.Center);
-        labelText.fontSize = label.Length > 7 ? 17f : 24f;
+        labelText = CreateText(buttonTransform, label + " Text", label, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(ActionButtonLabelWidth, 42f), 22, TextAlignmentOptions.Center);
+        labelText.fontSize = label.Length > 7 ? 14f : 21f;
         labelText.color = Color.white;
+
+        modelCenterMarker = CreateRectTransform(name + " Gaussian Center", buttonTransform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(28f, 28f));
+        Image markerImage = modelCenterMarker.gameObject.AddComponent<Image>();
+        markerImage.sprite = PrototypeVisualFactory.CircleSprite;
+        markerImage.color = new Color(1f, 1f, 1f, 0.92f);
+        markerImage.raycastTarget = false;
+        markerImage.preserveAspect = true;
+        modelCenterMarker.gameObject.SetActive(false);
         return image;
     }
 
@@ -269,13 +328,18 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         return image;
     }
 
-    private GameObject CreateStartScreen(Transform parent, out Button startButton)
+    private GameObject CreateStartScreen(Transform parent, out Button calibrationStartButton, out Button startButton)
     {
         GameObject screen = CreateOverlayPanel(parent, "Start Screen", new Color(0.02f, 0.03f, 0.03f, 0.88f));
-        TextMeshProUGUI title = CreateText(screen.transform, "Start Title", "Adaptive UI Test", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 96f), new Vector2(760f, 84f), 46, TextAlignmentOptions.Center);
+        TextMeshProUGUI title = CreateText(screen.transform, "Start Title", "Adaptive Touch Test", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 132f), new Vector2(760f, 84f), 46, TextAlignmentOptions.Center);
         title.color = Color.white;
 
-        startButton = CreateMenuButton(screen.transform, "Start Button", "Start", new Vector2(0f, -28f), new Vector2(280f, 78f), new Color(0.18f, 0.72f, 0.44f, 0.95f));
+        TextMeshProUGUI subtitle = CreateText(screen.transform, "Start Subtitle", "Choose whether to measure your four-button touch profile before entering combat.", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 54f), new Vector2(920f, 64f), 22, TextAlignmentOptions.Center);
+        subtitle.textWrappingMode = TextWrappingModes.Normal;
+        subtitle.color = new Color(0.86f, 0.9f, 0.92f, 1f);
+
+        calibrationStartButton = CreateMenuButton(screen.transform, "Calibrate Start Button", "Calibrate & Start", new Vector2(-190f, -72f), new Vector2(350f, 78f), new Color(0.18f, 0.72f, 0.44f, 0.95f));
+        startButton = CreateMenuButton(screen.transform, "Start Without Calibration Button", "Start", new Vector2(190f, -72f), new Vector2(260f, 78f), new Color(0.22f, 0.28f, 0.34f, 0.95f));
         return screen;
     }
 
@@ -355,5 +419,59 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         rectTransform.anchoredPosition = anchoredPosition;
         rectTransform.sizeDelta = size;
         return rectTransform;
+    }
+
+    private void AttachCommandLineRecorderIfRequested()
+    {
+        string outputDir = ReadCommandLineArgument("-kthOutputDir");
+        if (string.IsNullOrEmpty(outputDir) ||
+            FindAnyObjectByType<KTHTopDownPrototypePlayRecorder>() != null ||
+            FindAnyObjectByType<KTHFullPlaythroughRecorder>() != null)
+        {
+            return;
+        }
+
+        bool fullPlaythrough = string.Equals(ReadCommandLineArgument("-kthFullPlaythrough"), "1", System.StringComparison.OrdinalIgnoreCase) ||
+                               string.Equals(ReadCommandLineArgument("-kthFullPlaythrough"), "true", System.StringComparison.OrdinalIgnoreCase);
+        if (fullPlaythrough)
+        {
+            GameObject recorderObject = new GameObject("KTH Full Playthrough Recorder");
+            KTHFullPlaythroughRecorder recorder = recorderObject.AddComponent<KTHFullPlaythroughRecorder>();
+            recorder.outputDir = outputDir;
+            recorder.captureFps = 15;
+            recorder.captureWidth = 1280;
+            recorder.captureHeight = 720;
+            recorder.stopAfterContextShowcase = string.Equals(ReadCommandLineArgument("-kthContextShowcaseOnly"), "1", System.StringComparison.OrdinalIgnoreCase) ||
+                                                string.Equals(ReadCommandLineArgument("-kthContextShowcaseOnly"), "true", System.StringComparison.OrdinalIgnoreCase);
+            if (float.TryParse(ReadCommandLineArgument("-kthMaxPlaySeconds"), out float maxPlaySeconds) && maxPlaySeconds > 0f)
+            {
+                recorder.maxPlaySeconds = maxPlaySeconds;
+            }
+
+            Debug.Log($"[KTH] Runtime full playthrough recorder attached. outputDir={outputDir}");
+            return;
+        }
+
+        GameObject demoRecorderObject = new GameObject("KTH TopDown Prototype Play Recorder");
+        KTHTopDownPrototypePlayRecorder demoRecorder = demoRecorderObject.AddComponent<KTHTopDownPrototypePlayRecorder>();
+        demoRecorder.outputDir = outputDir;
+        demoRecorder.captureFps = 15;
+        demoRecorder.captureWidth = 1280;
+        demoRecorder.captureHeight = 720;
+        Debug.Log($"[KTH] Runtime top-down recorder attached. outputDir={outputDir}");
+    }
+
+    private string ReadCommandLineArgument(string name)
+    {
+        string[] args = System.Environment.GetCommandLineArgs();
+        for (int i = 0; i < args.Length - 1; i++)
+        {
+            if (string.Equals(args[i], name, System.StringComparison.OrdinalIgnoreCase))
+            {
+                return args[i + 1];
+            }
+        }
+
+        return "";
     }
 }

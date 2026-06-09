@@ -27,7 +27,9 @@ public class CombatManager : MonoBehaviour
     public float baseWhirlwindScore = 0.12f;
     public float closeEnemyRadius = 3f;
     public float projectileNearRadius = 0.95f;
-    public float projectileLookAheadSeconds = 0.75f;
+    public float projectileLookAheadSeconds = 1.15f;
+    public float preDodgeAttackReadyWindow = 0.65f;
+    [Range(-1f, 1f)] public float movementDangerDotThreshold = 0.35f;
 
     [Header("SampleScene Compatibility")]
     public bool useLegacyStatePriorFallback = true;
@@ -62,10 +64,20 @@ public class CombatManager : MonoBehaviour
         public int telegraphingEnemies;
         public int attackingEnemies;
         public int incomingProjectiles;
+        public int projectileThreats;
+        public int enemiesInAttackRange;
+        public int safeAttackTargets;
+        public int attackCommitTargets;
+        public int preDodgeEnemies;
+        public int movingTowardDangerEnemies;
+        public int dangerousCloseEnemies;
+        public int immediateThreats;
         public int whirlwindTargets;
         public EnemyKind closestEnemyKind;
         public string closestEnemyName;
         public float closestEnemyDistance;
+        public float attackOpportunityScore;
+        public float dodgeUrgencyScore;
     }
 
     private void Awake()
@@ -94,7 +106,14 @@ public class CombatManager : MonoBehaviour
         UpdateCombatUI();
     }
 
-    public void OnPlayerAttack()
+    public void ForceRefreshCombatContext()
+    {
+        ResolveReferences();
+        EvaluateCombatContext();
+        UpdateCombatUI();
+    }
+
+    public bool OnPlayerAttack()
     {
         ResolveReferences();
 
@@ -103,18 +122,18 @@ public class CombatManager : MonoBehaviour
             if (IsLegacyStatePriorActive())
             {
                 ReportFeedback("Attack accepted (SampleScene state prototype).", Color.green);
-                return;
+                return true;
             }
 
             ReportFeedback("No player found.", Color.red);
-            return;
+            return false;
         }
 
         EnemyControllerBase target = FindBestAttackTarget(playerController.attackRange + 0.45f);
         if (target == null)
         {
             ReportFeedback("Attack missed: no enemy in reach.", Color.gray);
-            return;
+            return false;
         }
 
         bool assistedRange = target.DistanceToPlayer > playerController.attackRange;
@@ -123,9 +142,10 @@ public class CombatManager : MonoBehaviour
 
         string assistText = assistedRange ? " (range assist)" : string.Empty;
         ReportFeedback($"Attack hit {target.displayName}{assistText}.", Color.green);
+        return true;
     }
 
-    public void OnPlayerDodge()
+    public bool OnPlayerDodge()
     {
         ResolveReferences();
 
@@ -134,73 +154,77 @@ public class CombatManager : MonoBehaviour
             if (IsLegacyStatePriorActive())
             {
                 ReportFeedback("Dodge accepted (SampleScene state prototype).", Color.cyan);
-                return;
+                return true;
             }
 
             ReportFeedback("No player found.", Color.red);
-            return;
+            return false;
         }
 
         Vector2 direction = CalculateDodgeDirection();
         playerController.PerformDodge(direction);
         ReportFeedback("Dodge accepted.", Color.cyan);
+        return true;
     }
 
-    public void OnPlayerHeal()
+    public bool OnPlayerHeal()
     {
         ResolveReferences();
 
         if (playerController == null)
         {
             ReportFeedback("No player found.", Color.red);
-            return;
+            return false;
         }
 
         if (playerController.HealCooldownRemaining > 0f)
         {
             ReportFeedback($"Heal cooldown: {playerController.HealCooldownRemaining:F1}s.", Color.gray);
-            return;
+            return false;
         }
 
         if (playerController.CurrentHP >= playerController.maxHP)
         {
             ReportFeedback("Heal skipped: HP is already full.", Color.gray);
-            return;
+            return false;
         }
 
         if (playerController.TryHeal(out int amountHealed))
         {
             ReportFeedback($"Healed {amountHealed} HP.", Color.green);
+            return true;
         }
+
+        return false;
     }
 
-    public void OnPlayerWhirlwind()
+    public bool OnPlayerWhirlwind()
     {
         ResolveReferences();
 
         if (playerController == null)
         {
             ReportFeedback("No player found.", Color.red);
-            return;
+            return false;
         }
 
         if (playerController.WhirlwindCooldownRemaining > 0f)
         {
             ReportFeedback($"Whirlwind cooldown: {playerController.WhirlwindCooldownRemaining:F1}s.", Color.gray);
-            return;
+            return false;
         }
 
         List<EnemyControllerBase> targets = FindWhirlwindTargets();
         if (targets.Count == 0)
         {
             ReportFeedback("Whirlwind missed: no nearby enemies.", Color.gray);
-            return;
+            return false;
         }
 
         if (!playerController.TryStartWhirlwindCooldown())
         {
             ReportFeedback($"Whirlwind cooldown: {playerController.WhirlwindCooldownRemaining:F1}s.", Color.gray);
-            return;
+            return false;
         }
 
         for (int i = 0; i < targets.Count; i++)
@@ -213,6 +237,7 @@ public class CombatManager : MonoBehaviour
 
         StartCoroutine(ShowWhirlwindVisual(playerController.transform.position, playerController.whirlwindRange));
         ReportFeedback($"Whirlwind hit {targets.Count} enemies.", new Color(1f, 0.82f, 0.18f, 1f));
+        return true;
     }
 
     public void ReportFeedback(string message, Color color)
@@ -255,18 +280,20 @@ public class CombatManager : MonoBehaviour
         float playerAttackRange = playerController != null ? playerController.attackRange : 2f;
         float playerWhirlwindRange = playerController != null ? playerController.whirlwindRange : 3f;
 
-        if (gameManager != null)
+        int managerEnemyCount = 0;
+        if (gameManager != null && gameManager.ActiveEnemies != null && gameManager.ActiveEnemies.Count > 0)
         {
             IReadOnlyList<EnemyControllerBase> enemies = gameManager.ActiveEnemies;
             for (int i = 0; i < enemies.Count; i++)
             {
                 EnemyControllerBase enemy = enemies[i];
-                if (enemy == null || !enemy.IsAlive)
+                if (!CanUseRegisteredEnemyForContext(enemy))
                 {
                     continue;
                 }
 
-                AddEnemyToContext(enemy, ref context, ref attackScore, ref dodgeScore, playerAttackRange);
+                AddEnemyToContext(enemy, ref context);
+                managerEnemyCount++;
 
                 if (playerController != null && enemy.DistanceToPlayer <= playerWhirlwindRange)
                 {
@@ -274,18 +301,19 @@ public class CombatManager : MonoBehaviour
                 }
             }
         }
-        else
+
+        if (managerEnemyCount == 0)
         {
             EnemyControllerBase[] enemies = FindObjectsByType<EnemyControllerBase>(FindObjectsSortMode.None);
             for (int i = 0; i < enemies.Length; i++)
             {
                 EnemyControllerBase enemy = enemies[i];
-                if (enemy == null || !enemy.IsAlive)
+                if (!CanUseEnemyForContext(enemy))
                 {
                     continue;
                 }
 
-                AddEnemyToContext(enemy, ref context, ref attackScore, ref dodgeScore, playerAttackRange);
+                AddEnemyToContext(enemy, ref context);
 
                 if (playerController != null && enemy.DistanceToPlayer <= playerWhirlwindRange)
                 {
@@ -295,11 +323,27 @@ public class CombatManager : MonoBehaviour
         }
 
         context.incomingProjectiles = CountIncomingProjectiles();
+        context.projectileThreats = context.incomingProjectiles;
+        context.immediateThreats += context.projectileThreats;
+        context.dodgeUrgencyScore += context.projectileThreats * 3f;
 
         if (playerController != null && playerController.CurrentHP <= playerController.maxHP * 0.35f)
         {
             dodgeScore += 0.75f;
         }
+
+        bool useStateFallback = ShouldUseLegacyStatePriorFallback(context);
+        if (useStateFallback)
+        {
+            CurrentPriorResult = ResolvePriorBuilder().BuildStatePrior(currentState);
+        }
+        else
+        {
+            CurrentPriorResult = ResolvePriorBuilder().Build(context, playerController, playerAttackRange);
+        }
+
+        attackScore = CurrentPriorResult.attackScore;
+        dodgeScore = CurrentPriorResult.dodgeScore;
 
         ApplySkillScores(context, ref healScore, ref whirlwindScore);
 
@@ -316,10 +360,13 @@ public class CombatManager : MonoBehaviour
         {
             currentState = MapEnemyState(CurrentPriorResult.enemyState);
         }
+
+        CurrentContext = context;
     }
 
     private void AddEnemyToContext(EnemyControllerBase enemy, ref CombatContext context)
     {
+        enemy.RefreshDistanceToPlayer();
         context.totalEnemies++;
 
         switch (enemy.enemyKind)
@@ -340,6 +387,67 @@ public class CombatManager : MonoBehaviour
             context.closeEnemies++;
         }
 
+        float playerAttackRange = playerController != null ? playerController.attackRange : 2f;
+        bool inPlayerAttackReach = enemy.DistanceToPlayer <= playerAttackRange + 0.45f;
+        bool enemyThreateningNow = enemy.IsTelegraphing || enemy.IsAttacking;
+        bool enemyCanAttackSoon = enemy.CanStartAttackSoon(preDodgeAttackReadyWindow);
+        bool meleeBodyPressure = enemy.enemyKind != EnemyKind.Ranged &&
+                                  enemy.DistanceToPlayer <= enemy.attackRange + 0.25f;
+        bool preDodgeDistance = enemy.enemyKind != EnemyKind.Ranged &&
+                                enemy.DistanceToPlayer <= enemy.attackRange + 0.85f;
+        bool movingTowardDanger = IsPlayerMovingTowardEnemy(enemy, playerAttackRange + 1.25f);
+        bool preDodgeCandidate = !enemyThreateningNow &&
+                                 preDodgeDistance &&
+                                 (enemyCanAttackSoon || movingTowardDanger || meleeBodyPressure);
+        bool attackCommitCandidate = inPlayerAttackReach &&
+                                     !enemyThreateningNow &&
+                                     !preDodgeCandidate &&
+                                     !meleeBodyPressure;
+        bool dangerouslyClose = meleeBodyPressure || enemyThreateningNow;
+
+        if (inPlayerAttackReach)
+        {
+            context.enemiesInAttackRange++;
+        }
+
+        if (dangerouslyClose)
+        {
+            context.dangerousCloseEnemies++;
+        }
+
+        if (movingTowardDanger)
+        {
+            context.movingTowardDangerEnemies++;
+        }
+
+        if (preDodgeCandidate)
+        {
+            context.preDodgeEnemies++;
+        }
+
+        if (enemyThreateningNow)
+        {
+            context.immediateThreats++;
+        }
+
+        if (attackCommitCandidate)
+        {
+            context.safeAttackTargets++;
+            context.attackCommitTargets++;
+        }
+
+        context.attackOpportunityScore += enemy.GetAttackOpportunityScore(playerAttackRange);
+        context.dodgeUrgencyScore += enemy.GetDodgeThreatScore();
+        if (preDodgeCandidate)
+        {
+            context.dodgeUrgencyScore += enemyCanAttackSoon ? 0.85f : 0.45f;
+        }
+
+        if (movingTowardDanger)
+        {
+            context.dodgeUrgencyScore += 0.35f;
+        }
+
         if (enemy.IsTelegraphing)
         {
             context.telegraphingEnemies++;
@@ -356,6 +464,43 @@ public class CombatManager : MonoBehaviour
             context.closestEnemyKind = enemy.enemyKind;
             context.closestEnemyName = enemy.displayName;
         }
+    }
+
+    private bool IsPlayerMovingTowardEnemy(EnemyControllerBase enemy, float checkRange)
+    {
+        if (enemy == null || playerController == null || !playerController.IsMoving)
+        {
+            return false;
+        }
+
+        if (enemy.DistanceToPlayer > Mathf.Max(0.1f, checkRange))
+        {
+            return false;
+        }
+
+        Vector2 moveInput = playerController.MoveInput;
+        if (moveInput.sqrMagnitude <= 0.001f)
+        {
+            return false;
+        }
+
+        Vector2 toEnemy = (Vector2)enemy.transform.position - (Vector2)playerController.transform.position;
+        if (toEnemy.sqrMagnitude <= 0.001f)
+        {
+            return true;
+        }
+
+        return Vector2.Dot(moveInput.normalized, toEnemy.normalized) >= movementDangerDotThreshold;
+    }
+
+    private static bool CanUseEnemyForContext(EnemyControllerBase enemy)
+    {
+        return enemy != null && enemy.gameObject.activeInHierarchy && (enemy.IsAlive || enemy.IsCalibrationScenarioEnemy);
+    }
+
+    private static bool CanUseRegisteredEnemyForContext(EnemyControllerBase enemy)
+    {
+        return enemy != null && enemy.gameObject.activeInHierarchy;
     }
 
     private CombatActionPriorBuilder ResolvePriorBuilder()
@@ -722,12 +867,13 @@ public class CombatManager : MonoBehaviour
                     ? $"{CurrentContext.closestEnemyName} {CurrentContext.closestEnemyDistance:F1}m"
                     : "None";
 
-            string skillText = playerController != null
-                ? $"HealCD {playerController.HealCooldownRemaining:F1}s   WhirlCD {playerController.WhirlwindCooldownRemaining:F1}s"
-                : "Skills unavailable";
+                string skillText = playerController != null
+                    ? $"HealCD {playerController.HealCooldownRemaining:F1}s   WhirlCD {playerController.WhirlwindCooldownRemaining:F1}s"
+                    : "Skills unavailable";
 
-            contextText.text =
-                $"Closest: {closestText}   Close: {CurrentContext.closeEnemies}   Whirl targets: {CurrentContext.whirlwindTargets}   Arrows: {CurrentContext.incomingProjectiles}   {skillText}";
+                contextText.text =
+                    $"Closest: {closestText}   Close: {CurrentContext.closeEnemies}   Commit: {CurrentContext.attackCommitTargets}   PreDodge: {CurrentContext.preDodgeEnemies}   MoveDanger: {CurrentContext.movingTowardDangerEnemies}   Danger: {CurrentContext.dangerousCloseEnemies}   Threat: {CurrentContext.immediateThreats}   Arrows: {CurrentContext.projectileThreats}   Whirl targets: {CurrentContext.whirlwindTargets}   {skillText}";
+            }
         }
 
         if (feedbackLogText != null && feedbackLogText.text.Length > 0 && Time.time > feedbackClearTime)

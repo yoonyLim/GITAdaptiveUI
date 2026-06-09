@@ -20,7 +20,13 @@ public class CombatActionPriorBuilder : MonoBehaviour
 
     [Header("Attack Opportunity Weights")]
     public float closestEnemyOpportunityWeight = 2.2f;
-    public float closeEnemyAttackWeight = 0.28f;
+    public float closeEnemyAttackWeight = 0.12f;
+    public float safeAttackTargetWeight = 1.65f;
+    public float attackCommitTargetWeight = 1.35f;
+    public float attackOpportunityScoreWeight = 0.35f;
+    public float immediateThreatAttackPenalty = 0.45f;
+    public float preDodgeAttackPenalty = 0.58f;
+    public float riskyCloseAttackPenalty = 0.7f;
     public float rangedEnemyAttackBonus = 0.15f;
     public float bossEnemyAttackBonus = 0.45f;
 
@@ -28,7 +34,12 @@ public class CombatActionPriorBuilder : MonoBehaviour
     public float telegraphThreatWeight = 2.2f;
     public float attackingThreatWeight = 2.8f;
     public float projectileThreatWeight = 2.45f;
-    public float closeEnemyThreatWeight = 0.2f;
+    public float immediateThreatWeight = 2.65f;
+    public float preDodgeEnemyWeight = 1.55f;
+    public float movementTowardDangerWeight = 0.75f;
+    public float dangerousCloseEnemyWeight = 0.9f;
+    public float dodgeUrgencyScoreWeight = 0.42f;
+    public float closeEnemyThreatWeight = 0.08f;
     public float closeEnemyCrowdBonus = 1.25f;
     public float heavyCrowdBonus = 0.85f;
     public float lowHpDodgeBonus = 0.75f;
@@ -61,13 +72,36 @@ public class CombatActionPriorBuilder : MonoBehaviour
         }
 
         attackScore += context.closeEnemies * closeEnemyAttackWeight;
+        attackScore += context.enemiesInAttackRange * closeEnemyAttackWeight;
+        attackScore += context.safeAttackTargets * safeAttackTargetWeight;
+        attackScore += context.attackCommitTargets * attackCommitTargetWeight;
+        attackScore += context.attackOpportunityScore * attackOpportunityScoreWeight;
         attackScore += context.rangedEnemies * rangedEnemyAttackBonus;
         attackScore += context.bossEnemies * bossEnemyAttackBonus;
 
+        int meleeImmediateThreats = Mathf.Max(0, context.immediateThreats - context.projectileThreats);
         dodgeScore += context.telegraphingEnemies * telegraphThreatWeight;
         dodgeScore += context.attackingEnemies * attackingThreatWeight;
-        dodgeScore += context.incomingProjectiles * projectileThreatWeight;
+        dodgeScore += meleeImmediateThreats * immediateThreatWeight;
+        dodgeScore += context.projectileThreats * projectileThreatWeight;
+        dodgeScore += context.preDodgeEnemies * preDodgeEnemyWeight;
+        dodgeScore += context.movingTowardDangerEnemies * movementTowardDangerWeight;
+        dodgeScore += context.dangerousCloseEnemies * dangerousCloseEnemyWeight;
+        dodgeScore += context.dodgeUrgencyScore * dodgeUrgencyScoreWeight;
         dodgeScore += context.closeEnemies * closeEnemyThreatWeight;
+
+        if (context.immediateThreats > 0 || context.projectileThreats > 0)
+        {
+            attackScore *= immediateThreatAttackPenalty;
+        }
+        else if (context.preDodgeEnemies > 0 || context.movingTowardDangerEnemies > 0)
+        {
+            attackScore *= preDodgeAttackPenalty;
+        }
+        else if (context.dangerousCloseEnemies > context.safeAttackTargets)
+        {
+            attackScore *= riskyCloseAttackPenalty;
+        }
 
         if (context.closeEnemies >= closeCrowdThreshold)
         {
@@ -110,14 +144,18 @@ public class CombatActionPriorBuilder : MonoBehaviour
 
     private ADUIEnemyState InferEnemyState(CombatManager.CombatContext context, float attackScore, float dodgeScore)
     {
-        if (context.attackingEnemies > 0 || context.incomingProjectiles > 0)
+        if (context.immediateThreats > 0 || context.projectileThreats > 0)
         {
             return ADUIEnemyState.Attacking;
         }
 
         float total = Mathf.Max(0.001f, attackScore + dodgeScore);
         float dodgePrior = Mathf.Clamp(dodgeScore / total, 0.05f, 0.95f);
-        if (context.telegraphingEnemies > 0 || dodgePrior >= telegraphDodgePriorThreshold)
+        if (context.telegraphingEnemies > 0 ||
+            context.preDodgeEnemies > 0 ||
+            context.movingTowardDangerEnemies > 0 ||
+            context.dangerousCloseEnemies > context.safeAttackTargets ||
+            dodgePrior >= telegraphDodgePriorThreshold)
         {
             return ADUIEnemyState.Telegraph;
         }

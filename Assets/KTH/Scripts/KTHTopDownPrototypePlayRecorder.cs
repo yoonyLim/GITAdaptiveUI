@@ -14,6 +14,8 @@ public class KTHTopDownPrototypePlayRecorder : MonoBehaviour
     public int captureHeight = 720;
 
     private AdaptiveTouchManager touchManager;
+    private FourButtonCalibrationFlow calibrationFlow;
+    private UserContextPriorModel contextPriorModel;
     private CombatManager combatManager;
     private RoguelikeGameManager gameManager;
     private ConditionManager conditionManager;
@@ -24,6 +26,8 @@ public class KTHTopDownPrototypePlayRecorder : MonoBehaviour
     private int frameIndex;
     private float nextCaptureTime;
     private string currentCase = "Boot";
+    private string currentCalibrationLine = "";
+    private string currentUserPriorLine = "";
     private string lastDecisionLine = "";
     private Vector2 currentTouch;
     private bool markerVisible;
@@ -48,6 +52,7 @@ public class KTHTopDownPrototypePlayRecorder : MonoBehaviour
         Directory.CreateDirectory(outputDir);
         Directory.CreateDirectory(Path.Combine(outputDir, "frames"));
 
+        Application.runInBackground = true;
         Screen.SetResolution(captureWidth, captureHeight, false);
         Application.targetFrameRate = 60;
         Time.captureFramerate = 0;
@@ -67,9 +72,24 @@ public class KTHTopDownPrototypePlayRecorder : MonoBehaviour
         ConfigureManagers();
         SetupOverlay();
 
-        yield return CaptureForSeconds(1.0f, "AdaptivePrototype boot: orthographic top-down");
+        yield return CaptureForSeconds(1.0f, "Start screen: choose Calibrate & Start or Start");
 
-        StartStage(1);
+        if (calibrationFlow != null)
+        {
+            calibrationFlow.BeginCalibration();
+            yield return AutoRunFourButtonCalibration();
+            yield return WaitForGameStartedOrTimeout();
+        }
+        else
+        {
+            StartStage(1);
+        }
+
+        if (gameManager != null && !gameManager.IsStageRunning)
+        {
+            StartStage(1);
+        }
+
         yield return CaptureForSeconds(1.4f, "Stage 1: melee enemies spawn around player");
         yield return TapCase("Stage 1: clear Attack tap", AttackButtonCenter(), 1.4f);
 
@@ -151,6 +171,88 @@ public class KTHTopDownPrototypePlayRecorder : MonoBehaviour
         }
     }
 
+    private IEnumerator AutoRunFourButtonCalibration()
+    {
+        if (calibrationFlow == null)
+        {
+            yield break;
+        }
+
+        float deadline = Time.realtimeSinceStartup + 36f;
+        while (calibrationFlow.CalibrationActive && Time.realtimeSinceStartup < deadline)
+        {
+            currentCase = CurrentCalibrationLabel();
+            currentTouch = CalibrationTouchPosition();
+            ADUIContextScenario displayedScenario = CurrentDisplayScenario();
+            currentCalibrationLine = $"calibration={currentCase}";
+            currentUserPriorLine = UserPriorLine(displayedScenario);
+            markerVisible = true;
+            yield return CaptureForSeconds(0.08f, currentCase);
+            calibrationFlow.SubmitCalibrationTouch(currentTouch);
+            currentUserPriorLine = UserPriorLine(displayedScenario);
+            yield return CaptureForSeconds(0.06f, currentCase);
+            markerVisible = false;
+            yield return CaptureForSeconds(0.04f, currentCase);
+        }
+
+        markerVisible = false;
+        currentCalibrationLine = "";
+        currentUserPriorLine = "";
+    }
+
+    private string CurrentCalibrationLabel()
+    {
+        if (calibrationFlow == null)
+        {
+            return "Calibration unavailable";
+        }
+
+        string targetLabel = IsScenarioCalibrationTrial()
+            ? $"scenario {calibrationFlow.CurrentScenarioKey}"
+            : $"{calibrationFlow.CurrentTargetAction} {calibrationFlow.CurrentTrialType}";
+        return $"Calibration {calibrationFlow.CurrentTrialIndex + 1}/{calibrationFlow.CalibrationTotalCount}: {targetLabel}";
+    }
+
+    private ADUIContextScenario CurrentDisplayScenario()
+    {
+        if (calibrationFlow != null &&
+            calibrationFlow.CalibrationActive &&
+            IsScenarioCalibrationTrial() &&
+            Enum.TryParse(calibrationFlow.CurrentScenarioKey, out ADUIContextScenario parsedScenario))
+        {
+            return parsedScenario;
+        }
+
+        if (contextPriorModel != null && combatManager != null)
+        {
+            return contextPriorModel.Classify(combatManager.CurrentContext, combatManager.playerController);
+        }
+
+        return ADUIContextScenario.General;
+    }
+
+    private string UserPriorLine(ADUIContextScenario scenario)
+    {
+        return contextPriorModel != null
+            ? $"user_prior={contextPriorModel.Summary(scenario)}"
+            : "user_prior=unavailable";
+    }
+
+    private IEnumerator WaitForGameStartedOrTimeout()
+    {
+        float deadline = Time.realtimeSinceStartup + 4f;
+        while (Time.realtimeSinceStartup < deadline)
+        {
+            ResolveReferences();
+            if (gameManager != null && gameManager.IsStageRunning)
+            {
+                yield break;
+            }
+
+            yield return CaptureForSeconds(0.1f, "Calibration complete: game starting");
+        }
+    }
+
     private IEnumerator TapCase(string label, Vector2 touch, float duration)
     {
         currentCase = label;
@@ -185,6 +287,8 @@ public class KTHTopDownPrototypePlayRecorder : MonoBehaviour
     private void ResolveReferences()
     {
         touchManager = FindAnyObjectByType<AdaptiveTouchManager>();
+        calibrationFlow = FindAnyObjectByType<FourButtonCalibrationFlow>();
+        contextPriorModel = FindAnyObjectByType<UserContextPriorModel>();
         combatManager = CombatManager.Instance != null ? CombatManager.Instance : FindAnyObjectByType<CombatManager>();
         gameManager = RoguelikeGameManager.Instance != null ? RoguelikeGameManager.Instance : FindAnyObjectByType<RoguelikeGameManager>();
         conditionManager = FindAnyObjectByType<ConditionManager>();
@@ -244,6 +348,88 @@ public class KTHTopDownPrototypePlayRecorder : MonoBehaviour
         return (AttackButtonCenter() + DodgeButtonCenter()) * 0.5f;
     }
 
+    private Vector2 CalibrationTouchPosition()
+    {
+        if (calibrationFlow != null &&
+            IsScenarioCalibrationTrial() &&
+            Enum.TryParse(calibrationFlow.CurrentScenarioKey, out ADUIContextScenario scenario))
+        {
+            string responseAction = UserContextPriorModel.DefaultResponseForScenario(scenario);
+            if (touchManager != null && touchManager.TryGetActionButtonCenter(responseAction, out Vector2 responseCenter))
+            {
+                return responseCenter + new Vector2(14f, -10f);
+            }
+        }
+
+        if (calibrationFlow == null || !calibrationFlow.TryGetCurrentTargetCenter(out Vector2 center))
+        {
+            return AttackButtonCenter();
+        }
+
+        Vector2 consistentBias = new Vector2(18f, -12f);
+        if (string.Equals(calibrationFlow.CurrentTrialType, "inner_edge", StringComparison.OrdinalIgnoreCase))
+        {
+            Vector2 clusterCenter = FourButtonClusterCenter();
+            Vector2 inward = clusterCenter - center;
+            if (inward.sqrMagnitude < 1f)
+            {
+                inward = Vector2.left;
+            }
+
+            return center + inward.normalized * 62f + consistentBias * 0.4f;
+        }
+
+        if (string.Equals(calibrationFlow.CurrentTrialType, "rapid_switch", StringComparison.OrdinalIgnoreCase))
+        {
+            Vector2 clusterCenter = FourButtonClusterCenter();
+            Vector2 inward = clusterCenter - center;
+            Vector2 diagonalRush = inward.sqrMagnitude > 1f ? inward.normalized * 42f : Vector2.left * 42f;
+            return center + diagonalRush + consistentBias * 0.7f + new Vector2(-8f, -10f);
+        }
+
+        if (string.Equals(calibrationFlow.CurrentTrialType, "joystick_hold", StringComparison.OrdinalIgnoreCase))
+        {
+            return center + consistentBias + new Vector2(-18f, -24f);
+        }
+
+        if (string.Equals(calibrationFlow.CurrentTrialType, "validation", StringComparison.OrdinalIgnoreCase))
+        {
+            Vector2 clusterCenter = FourButtonClusterCenter();
+            Vector2 inward = clusterCenter - center;
+            Vector2 pressureBias = inward.sqrMagnitude > 1f ? inward.normalized * 50f : Vector2.left * 50f;
+            return center + pressureBias + consistentBias * 0.55f;
+        }
+
+        int index = Mathf.Max(0, calibrationFlow.CurrentTrialIndex);
+        Vector2 jitter = new Vector2(((index % 3) - 1) * 6f, (((index / 3) % 3) - 1) * 5f);
+        return center + consistentBias + jitter;
+    }
+
+    private bool IsScenarioCalibrationTrial()
+    {
+        return calibrationFlow != null &&
+               (string.Equals(calibrationFlow.CurrentTrialType, "combat_scenario", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(calibrationFlow.CurrentTrialType, "scenario_response", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private Vector2 FourButtonClusterCenter()
+    {
+        string[] actions = { "Attack", "Dodge", "Heal", "Whirlwind" };
+        Vector2 sum = Vector2.zero;
+        int count = 0;
+
+        for (int i = 0; i < actions.Length; i++)
+        {
+            if (touchManager != null && touchManager.TryGetActionButtonCenter(actions[i], out Vector2 center))
+            {
+                sum += center;
+                count++;
+            }
+        }
+
+        return count > 0 ? sum / count : BetweenButtons();
+    }
+
     private void InvokeTouch(Vector2 position)
     {
         ResolveReferences();
@@ -282,8 +468,8 @@ public class KTHTopDownPrototypePlayRecorder : MonoBehaviour
         panelRect.anchorMin = new Vector2(0f, 1f);
         panelRect.anchorMax = new Vector2(0f, 1f);
         panelRect.pivot = new Vector2(0f, 1f);
-        panelRect.anchoredPosition = new Vector2(18f, -18f);
-        panelRect.sizeDelta = new Vector2(820f, 166f);
+        panelRect.anchoredPosition = new Vector2(18f, -286f);
+        panelRect.sizeDelta = new Vector2(940f, 240f);
 
         Image panelImage = panel.AddComponent<Image>();
         panelImage.color = new Color(0.03f, 0.04f, 0.06f, 0.78f);
@@ -296,7 +482,7 @@ public class KTHTopDownPrototypePlayRecorder : MonoBehaviour
         textRect.offsetMin = new Vector2(14f, 10f);
         textRect.offsetMax = new Vector2(-14f, -10f);
         overlayText = textObject.AddComponent<TextMeshProUGUI>();
-        overlayText.fontSize = 18f;
+        overlayText.fontSize = 16f;
         overlayText.color = Color.white;
         overlayText.alignment = TextAlignmentOptions.TopLeft;
 
@@ -330,14 +516,30 @@ public class KTHTopDownPrototypePlayRecorder : MonoBehaviour
         }
 
         string context = combatManager != null
-            ? $"enemies={combatManager.CurrentContext.totalEnemies}, close={combatManager.CurrentContext.closeEnemies}, telegraph={combatManager.CurrentContext.telegraphingEnemies}, attacking={combatManager.CurrentContext.attackingEnemies}, projectiles={combatManager.CurrentContext.incomingProjectiles}, state={combatManager.currentState}"
+            ? $"enemies={combatManager.CurrentContext.totalEnemies}, close={combatManager.CurrentContext.closeEnemies}, commit={combatManager.CurrentContext.attackCommitTargets}, preDodge={combatManager.CurrentContext.preDodgeEnemies}, moveDanger={combatManager.CurrentContext.movingTowardDangerEnemies}, immediate={combatManager.CurrentContext.immediateThreats}, projectiles={combatManager.CurrentContext.projectileThreats}, state={combatManager.currentState}"
             : "combat manager unavailable";
+
+        string calibration = calibrationFlow != null
+            ? calibrationFlow.CalibrationActive
+                ? !string.IsNullOrEmpty(currentCalibrationLine)
+                    ? currentCalibrationLine
+                    : $"calibration={CurrentCalibrationLabel()}"
+                : calibrationFlow.CalibrationComplete
+                    ? $"calibration=complete {(touchManager != null ? touchManager.FourButtonCalibrationSummary : "")}"
+                    : "calibration=start-choice"
+            : "calibration=unavailable";
+
+        string userPrior = !string.IsNullOrEmpty(currentUserPriorLine)
+            ? currentUserPriorLine
+            : UserPriorLine(CurrentDisplayScenario());
 
         overlayText.text =
             $"{currentCase}\n" +
             "scene=Assets/Scenes/AdaptivePrototype.unity | camera=orthographic top-down | manager=RoguelikeGameManager\n" +
             $"condition=context_bayesian_safety | source={source} | prior A/D={attackPrior:0.00}/{dodgePrior:0.00}\n" +
             $"{context}\n" +
+            $"{calibration}\n" +
+            $"{userPrior}\n" +
             lastDecisionLine;
     }
 

@@ -48,6 +48,11 @@ public class VirtualJoystick : MonoBehaviour
         ClearInput();
     }
 
+    public void SetInput(Vector2 normalizedInput)
+    {
+        ApplyInput(Vector2.ClampMagnitude(normalizedInput, 1f));
+    }
+
     private void UpdateTouchInput()
     {
         if (activeTouchId >= 0)
@@ -132,20 +137,26 @@ public class VirtualJoystick : MonoBehaviour
             out Vector2 localPoint);
 
         float radius = Mathf.Max(1f, Mathf.Min(joystickBase.rect.width, joystickBase.rect.height) * 0.5f);
-        Vector2 normalizedInput = Vector2.ClampMagnitude(localPoint / radius, 1f);
-        if (normalizedInput.magnitude < deadZone)
+        ApplyInput(localPoint / radius);
+    }
+
+    private void ApplyInput(Vector2 normalizedInput)
+    {
+        Vector2 clampedInput = Vector2.ClampMagnitude(normalizedInput, 1f);
+        if (clampedInput.magnitude < deadZone)
         {
-            normalizedInput = Vector2.zero;
+            clampedInput = Vector2.zero;
         }
 
         if (joystickHandle != null)
         {
-            joystickHandle.anchoredPosition = normalizedInput * radius * handleTravelRatio;
+            float radius = Mathf.Max(1f, Mathf.Min(joystickBase.rect.width, joystickBase.rect.height) * 0.5f);
+            joystickHandle.anchoredPosition = clampedInput * radius * handleTravelRatio;
         }
 
         if (targetPlayer != null)
         {
-            targetPlayer.SetVirtualMoveInput(normalizedInput);
+            targetPlayer.SetVirtualMoveInput(clampedInput);
         }
     }
 
@@ -166,14 +177,6 @@ public class VirtualJoystick : MonoBehaviour
         activeTouchId = -1;
         mouseActive = false;
 
-        if (joystickHandle != null)
-        {
-            joystickHandle.anchoredPosition = Vector2.zero;
-        }
-
-        if (targetPlayer != null)
-        {
-            targetPlayer.SetVirtualMoveInput(Vector2.zero);
-        }
+        ApplyInput(Vector2.zero);
     }
 }

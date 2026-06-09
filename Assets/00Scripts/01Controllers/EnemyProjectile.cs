@@ -8,6 +8,7 @@ public class EnemyProjectile : MonoBehaviour
     public float speed = 8f;
     public int damage = 10;
     public float lifetime = 4f;
+    public bool alwaysThreatening;
 
     public static IReadOnlyList<EnemyProjectile> ActiveProjectiles => activeProjectiles;
 
@@ -58,6 +59,11 @@ public class EnemyProjectile : MonoBehaviour
 
     public bool IsThreatening(Vector2 playerPosition, float nearRadius, float lookAheadSeconds)
     {
+        if (alwaysThreatening)
+        {
+            return true;
+        }
+
         Vector2 projectilePosition = transform.position;
         if (Vector2.Distance(projectilePosition, playerPosition) <= nearRadius)
         {
@@ -80,10 +86,21 @@ public class EnemyProjectile : MonoBehaviour
 
             Destroy(gameObject);
         }
-        else if (collision.CompareTag("Wall"))
+        else if (IsArenaBoundary(collision))
         {
             Destroy(gameObject);
         }
+    }
+
+    private bool IsArenaBoundary(Collider2D collision)
+    {
+        if (collision == null)
+        {
+            return false;
+        }
+
+        string objectName = collision.gameObject.name;
+        return objectName.Contains("Border") || objectName.Contains("Wall");
     }
 
     public static void DestroyAllProjectiles()
