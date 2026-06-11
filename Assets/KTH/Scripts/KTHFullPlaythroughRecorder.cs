@@ -12,11 +12,17 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
     public int captureFps = 15;
     public int captureWidth = 1280;
     public int captureHeight = 720;
+    public string requestedCondition = "calibrated";
     public float maxPlaySeconds = 240f;
     public bool simulateHighTouchErrorPressure = true;
     public bool runContextShowcaseAfterCalibration = true;
     public bool stopAfterContextShowcase;
     public float contextShowcaseHoldSeconds = 2.25f;
+    public bool compactRecorderOverlay = true;
+    public bool showResearchOverlayInRecording;
+    public bool forceGameOverCheck;
+    public float calibrationReadyPreviewSeconds = 0.2f;
+    public float calibrationPostTouchSeconds = 0.28f;
     [Range(0.4f, 1.6f)]
     public float edgeTouchRadiusMultiplier = 1.08f;
 
@@ -26,8 +32,10 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
     private CombatManager combatManager;
     private RoguelikeGameManager gameManager;
     private PlayerController playerController;
+    private AdaptiveGameHudController gameHud;
     private MethodInfo processInputBegan;
     private MethodInfo processInputEnded;
+    private CanvasGroup overlayGroup;
     private TextMeshProUGUI overlayText;
     private RectTransform touchMarker;
     private int frameIndex;
@@ -85,45 +93,78 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
 
         yield return CaptureForSeconds(1.0f, "Start screen");
 
+        string normalizedCondition = NormalizedCondition();
         if (calibrationFlow != null)
         {
-            currentCase = "Calibrate before play";
-            if (runContextShowcaseAfterCalibration)
+            if (normalizedCondition == "raw")
             {
-                calibrationFlow.autoStartGameAfterCalibration = false;
+                currentCase = "Condition: raw fixed button";
+                calibrationFlow.BeginRawGame();
+                yield return WaitForGameStartedOrTimeout();
             }
-
-            calibrationFlow.BeginCalibration();
-            yield return AutoRunFourButtonCalibration();
-            if (runContextShowcaseAfterCalibration)
+            else if (normalizedCondition == "no_calibration")
             {
-                yield return RunContextScenarioShowcase();
-                if (stopAfterContextShowcase)
-                {
-                    markerVisible = false;
-                    yield return CaptureForSeconds(0.5f, "Context showcase recording complete");
-                    WriteDoneFile();
-                    QuitApplication();
-                    yield break;
-                }
-
-                gameManager?.BeginPrototype();
+                currentCase = "Condition: adaptive without calibration";
+                calibrationFlow.BeginGameWithoutCalibration();
+                yield return WaitForGameStartedOrTimeout();
             }
             else
             {
-                yield return WaitForGameStartedOrTimeout();
+                currentCase = "Condition: calibrated adaptive";
+                if (runContextShowcaseAfterCalibration)
+                {
+                    calibrationFlow.autoStartGameAfterCalibration = false;
+                }
+
+                calibrationFlow.BeginCalibration();
+                yield return AutoRunFourButtonCalibration();
+                if (runContextShowcaseAfterCalibration)
+                {
+                    yield return RunContextScenarioShowcase();
+                    if (stopAfterContextShowcase)
+                    {
+                        markerVisible = false;
+                        yield return CaptureForSeconds(0.5f, "Context showcase recording complete");
+                        WriteDoneFile();
+                        QuitApplication();
+                        yield break;
+                    }
+
+                    gameManager?.BeginPrototype();
+                    calibrationFlow.HideCalibrationPrompt();
+                }
+                else
+                {
+                    yield return WaitForGameStartedOrTimeout();
+                }
             }
         }
         else
         {
             gameManager?.BeginPrototype();
+            calibrationFlow?.HideCalibrationPrompt();
+        }
+
+        if (forceGameOverCheck)
+        {
+            ResolveReferences();
+            yield return CaptureForSeconds(0.75f, "Game over check: before lethal damage");
+            if (playerController != null)
+            {
+                playerController.TakeDamage(Mathf.Max(1, playerController.CurrentHP));
+            }
+
+            yield return CaptureForSeconds(2.0f, "Game over check");
+            WriteDoneFile();
+            QuitApplication();
+            yield break;
         }
 
         float deadline = Time.realtimeSinceStartup + maxPlaySeconds;
         while (Time.realtimeSinceStartup < deadline)
         {
             ResolveReferences();
-            if (IsPrototypeComplete())
+            if (IsPrototypeEnded())
             {
                 break;
             }
@@ -144,7 +185,7 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
         }
 
         markerVisible = false;
-        yield return CaptureForSeconds(2.0f, IsPrototypeComplete() ? "Full playthrough complete" : "Full playthrough timeout");
+        yield return CaptureForSeconds(2.0f, IsPrototypeComplete() ? "Full playthrough complete" : IsPrototypeFailed() ? "Game over" : "Full playthrough timeout");
 
         WriteDoneFile();
         QuitApplication();
@@ -155,7 +196,9 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
         File.WriteAllText(
             Path.Combine(outputDir, "done.txt"),
             $"frames={frameIndex}{Environment.NewLine}" +
+            $"condition={NormalizedCondition()}{Environment.NewLine}" +
             $"complete={IsPrototypeComplete()}{Environment.NewLine}" +
+            $"failed={IsPrototypeFailed()}{Environment.NewLine}" +
             $"stage={(gameManager != null ? gameManager.CurrentStage : -1)}{Environment.NewLine}" +
             $"hp={(playerController != null ? playerController.CurrentHP : -1)}{Environment.NewLine}" +
             $"maxAbsPlayerX={maxAbsPlayerX:F2}{Environment.NewLine}" +
@@ -196,20 +239,40 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
         }
 
         float deadline = Time.realtimeSinceStartup +
-                         Mathf.Max(42f, calibrationFlow.CalibrationTotalCount * 0.85f + 18f);
+                         Mathf.Max(42f, calibrationFlow.CalibrationTotalCount * 1.8f + 18f);
+        int observedTrial = -1;
         while (calibrationFlow.CalibrationActive && Time.realtimeSinceStartup < deadline)
         {
             currentCase = CurrentCalibrationLabel();
+
+            if (observedTrial != calibrationFlow.CurrentTrialIndex)
+            {
+                observedTrial = calibrationFlow.CurrentTrialIndex;
+                markerVisible = false;
+                yield return CaptureUntilCalibrationReady(observedTrial);
+            }
+
             currentTouch = CalibrationTouchPosition();
             markerVisible = true;
-            yield return CaptureForSeconds(0.08f, currentCase);
+            yield return CaptureForSeconds(calibrationReadyPreviewSeconds, currentCase);
             calibrationFlow.SubmitCalibrationTouch(currentTouch);
-            yield return CaptureForSeconds(0.06f, currentCase);
+            yield return CaptureForSeconds(calibrationPostTouchSeconds, currentCase);
             markerVisible = false;
-            yield return CaptureForSeconds(0.04f, currentCase);
         }
 
         markerVisible = false;
+    }
+
+    private IEnumerator CaptureUntilCalibrationReady(int trialIndex)
+    {
+        while (calibrationFlow != null &&
+               calibrationFlow.CalibrationActive &&
+               calibrationFlow.CurrentTrialIndex == trialIndex &&
+               !calibrationFlow.CurrentTrialAcceptsInput)
+        {
+            currentCase = CurrentCalibrationLabel();
+            yield return CaptureTick();
+        }
     }
 
     private IEnumerator RunContextScenarioShowcase()
@@ -224,7 +287,9 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
             ADUIContextScenario.AttackCommitWindow,
             ADUIContextScenario.PreDodgeWindow,
             ADUIContextScenario.ImmediateDodgeThreat,
-            ADUIContextScenario.ProjectileDodgeThreat
+            ADUIContextScenario.ProjectileDodgeThreat,
+            ADUIContextScenario.MovingUnderPressure,
+            ADUIContextScenario.LowHpThreat
         };
 
         yield return CaptureForSeconds(0.4f, "Context showcase setup");
@@ -237,6 +302,11 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
             string label = $"Context showcase {i + 1}/{showcaseScenarios.Length}: {UserContextPriorModel.ScenarioLabel(scenario)}";
             yield return CaptureForSeconds(Mathf.Max(1.8f, contextShowcaseHoldSeconds), label);
         }
+
+        gameManager.BeginModeShowcaseScenario(ADUIInteractionMode.CognitiveFirst);
+        CombatManager.Instance?.ForceRefreshCombatContext();
+        currentAction = "hold=ReadState";
+        yield return CaptureForSeconds(Mathf.Max(2.0f, contextShowcaseHoldSeconds), "Mode showcase: CognitiveFirst information state");
 
         gameManager.ClearCalibrationScenario();
         CombatManager.Instance?.ForceRefreshCombatContext();
@@ -254,7 +324,7 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
                 yield break;
             }
 
-            yield return CaptureForSeconds(0.1f, "Calibration complete - starting game");
+            yield return CaptureForSeconds(0.1f, "캘리브레이션 완료 - 게임 시작 대기");
         }
     }
 
@@ -519,7 +589,17 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
 
     private bool IsPrototypeComplete()
     {
-        return gameManager != null && gameManager.CurrentStage > 3 && !gameManager.IsStageRunning;
+        return gameManager != null && gameManager.PrototypeComplete;
+    }
+
+    private bool IsPrototypeFailed()
+    {
+        return gameManager != null && gameManager.PrototypeFailed;
+    }
+
+    private bool IsPrototypeEnded()
+    {
+        return gameManager != null && gameManager.PrototypeEnded;
     }
 
     private IEnumerator CaptureForSeconds(float seconds, string label)
@@ -551,13 +631,13 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
     {
         if (calibrationFlow == null)
         {
-            return "Calibration unavailable";
+            return "캘리브레이션 상태 없음";
         }
 
         string targetLabel = IsScenarioCalibrationTrial()
             ? $"scenario {calibrationFlow.CurrentScenarioKey} {calibrationFlow.CurrentTargetAction}"
             : $"{calibrationFlow.CurrentTargetAction} {calibrationFlow.CurrentTrialType}";
-        return $"Calibration {calibrationFlow.CurrentTrialIndex + 1}/{calibrationFlow.CalibrationTotalCount}: {targetLabel}";
+        return $"캘리브레이션 {calibrationFlow.CurrentTrialIndex + 1}/{calibrationFlow.CalibrationTotalCount}: {targetLabel}";
     }
 
     private Vector2 CalibrationTouchPosition()
@@ -896,6 +976,7 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
         contextPriorModel = FindAnyObjectByType<UserContextPriorModel>();
         combatManager = CombatManager.Instance != null ? CombatManager.Instance : FindAnyObjectByType<CombatManager>();
         gameManager = RoguelikeGameManager.Instance != null ? RoguelikeGameManager.Instance : FindAnyObjectByType<RoguelikeGameManager>();
+        gameHud = FindAnyObjectByType<AdaptiveGameHudController>();
         playerController = gameManager != null && gameManager.PlayerController != null
             ? gameManager.PlayerController
             : FindAnyObjectByType<PlayerController>();
@@ -919,6 +1000,11 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
             touchManager.directHitRadiusScale = 0.62f;
             touchManager.maxGaussianVisualizerRadius = 88f;
         }
+
+        if (gameHud != null)
+        {
+            gameHud.showResearchOverlay = showResearchOverlayInRecording;
+        }
     }
 
     private void SetupOverlay()
@@ -939,11 +1025,20 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
         panelRect.anchorMin = new Vector2(0f, 1f);
         panelRect.anchorMax = new Vector2(0f, 1f);
         panelRect.pivot = new Vector2(0f, 1f);
-        panelRect.anchoredPosition = new Vector2(18f, -286f);
-        panelRect.sizeDelta = new Vector2(990f, 240f);
+        panelRect.anchoredPosition = compactRecorderOverlay
+            ? new Vector2(20f, -154f)
+            : new Vector2(18f, -286f);
+        panelRect.sizeDelta = compactRecorderOverlay
+            ? new Vector2(760f, 138f)
+            : new Vector2(990f, 240f);
 
         Image panelImage = panel.AddComponent<Image>();
-        panelImage.color = new Color(0.03f, 0.04f, 0.06f, 0.78f);
+        panelImage.color = compactRecorderOverlay
+            ? new Color(0.03f, 0.04f, 0.06f, 0.84f)
+            : new Color(0.03f, 0.04f, 0.06f, 0.78f);
+        overlayGroup = panel.AddComponent<CanvasGroup>();
+        overlayGroup.interactable = false;
+        overlayGroup.blocksRaycasts = false;
 
         GameObject textObject = new GameObject("KTH Full Playthrough Overlay Text");
         textObject.transform.SetParent(panel.transform, false);
@@ -953,9 +1048,13 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
         textRect.offsetMin = new Vector2(14f, 10f);
         textRect.offsetMax = new Vector2(-14f, -10f);
         overlayText = textObject.AddComponent<TextMeshProUGUI>();
-        overlayText.fontSize = 16f;
+        KoreanTmpFontUtility.Apply(overlayText);
+        overlayText.fontSize = compactRecorderOverlay ? 17f : 16f;
         overlayText.color = Color.white;
         overlayText.alignment = TextAlignmentOptions.TopLeft;
+        overlayText.textWrappingMode = TextWrappingModes.Normal;
+        overlayText.outlineWidth = compactRecorderOverlay ? 0.12f : 0f;
+        overlayText.outlineColor = new Color(0f, 0f, 0f, 0.85f);
 
         GameObject marker = new GameObject("KTH Full Playthrough Touch Marker");
         marker.transform.SetParent(canvas.transform, false);
@@ -980,6 +1079,20 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
             return;
         }
 
+        if (overlayGroup != null)
+        {
+            bool hideDuringCalibrationPrompt = compactRecorderOverlay &&
+                                               calibrationFlow != null &&
+                                               calibrationFlow.CalibrationActive;
+            overlayGroup.alpha = hideDuringCalibrationPrompt ? 0f : 1f;
+        }
+
+        if (compactRecorderOverlay)
+        {
+            overlayText.text = BuildCompactOverlayText();
+            return;
+        }
+
         string context = combatManager != null
             ? $"context enemies={combatManager.CurrentContext.totalEnemies}, close={combatManager.CurrentContext.closeEnemies}, commit={combatManager.CurrentContext.attackCommitTargets}, preDodge={combatManager.CurrentContext.preDodgeEnemies}, moveDanger={combatManager.CurrentContext.movingTowardDangerEnemies}, immediate={combatManager.CurrentContext.immediateThreats}, projectiles={combatManager.CurrentContext.projectileThreats}"
             : "context unavailable";
@@ -995,6 +1108,9 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
         string hp = playerController != null
             ? $"hp={playerController.CurrentHP}/{playerController.maxHP} healCD={playerController.HealCooldownRemaining:0.0} whirlCD={playerController.WhirlwindCooldownRemaining:0.0}"
             : "hp unavailable";
+        string adaptiveSummary = touchManager != null
+            ? $"{touchManager.RuntimeModeSummary}\n{touchManager.RuntimeDebugSummary}"
+            : "adaptive runtime unavailable";
 
         overlayText.text =
             $"{currentCase}\n" +
@@ -1002,7 +1118,120 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
             $"{stage} | {hp} | action={currentAction}\n" +
             $"{context} | {priors}\n" +
             $"{userPrior}\n" +
+            $"{adaptiveSummary}\n" +
             lastDecisionLine;
+    }
+
+    private string BuildCompactOverlayText()
+    {
+        if (calibrationFlow != null && calibrationFlow.CalibrationActive)
+        {
+            string phase = calibrationFlow.CurrentTrialAcceptsInput ? "시작" : "읽기";
+            string instruction = calibrationFlow.CurrentInstruction;
+            if (instruction.Length > 82)
+            {
+                instruction = instruction.Substring(0, 79) + "...";
+            }
+
+            return $"{RecordingConditionLabel()} | {phase}  캘리브레이션 {calibrationFlow.CurrentTrialIndex + 1}/{calibrationFlow.CalibrationTotalCount}\n" +
+                   instruction;
+        }
+
+        if (!IsPrototypeFailed() &&
+            calibrationFlow != null &&
+            calibrationFlow.CalibrationComplete &&
+            gameManager != null &&
+            !gameManager.IsStageRunning)
+        {
+            return $"{RecordingConditionLabel()}\n캘리브레이션 완료 - 학습된 터치 프로필로 전투 시작";
+        }
+
+        if (IsPrototypeFailed())
+        {
+            string failedHp = playerController != null
+                ? $"HP {playerController.CurrentHP}/{playerController.maxHP}"
+                : "HP 0";
+            return $"Game Over | Stage {gameManager.CurrentStage}/3\n{failedHp}";
+        }
+
+        string stage = gameManager != null
+            ? $"Stage {gameManager.CurrentStage}/3"
+            : "Stage ?";
+        string hp = playerController != null
+            ? $"HP {playerController.CurrentHP}/{playerController.maxHP}"
+            : "HP ?";
+        string scenario = touchManager != null
+            ? UserContextPriorModel.ScenarioLabel(touchManager.CurrentScenario)
+            : "scenario unavailable";
+        string mode = touchManager != null && touchManager.CurrentPolicy != null
+            ? touchManager.CurrentPolicy.mode.ToString()
+            : "mode unavailable";
+
+        return $"{RecordingConditionLabel()} | {stage} | {hp} | {mode}\n" +
+               $"scenario={scenario} | {currentAction}\n" +
+               CompactCombatContextLine() + "\n" +
+               CompactDemandPolicyLine();
+    }
+
+    private string NormalizedCondition()
+    {
+        string value = string.IsNullOrWhiteSpace(requestedCondition)
+            ? "calibrated"
+            : requestedCondition.Trim().ToLowerInvariant();
+
+        if (value == "raw" ||
+            value == "raw_button" ||
+            value == "raw_fixed_button" ||
+            value == "fixed")
+        {
+            return "raw";
+        }
+
+        if (value == "no_cal" ||
+            value == "no_calibration" ||
+            value == "nocal" ||
+            value == "default_adaptive")
+        {
+            return "no_calibration";
+        }
+
+        return "calibrated";
+    }
+
+    private string RecordingConditionLabel()
+    {
+        switch (NormalizedCondition())
+        {
+            case "raw":
+                return "조건 1: 기본 버튼";
+            case "no_calibration":
+                return "조건 2: 보정 없음 적응형";
+            default:
+                return "조건 3: 캘리브레이션 적응형";
+        }
+    }
+
+    private string CompactCombatContextLine()
+    {
+        if (combatManager == null)
+        {
+            return "ctx unavailable";
+        }
+
+        CombatManager.CombatContext context = combatManager.CurrentContext;
+        return $"ctx E={context.totalEnemies} close={context.closeEnemies} atk={context.attackingEnemies} tele={context.telegraphingEnemies} proj={context.projectileThreats} commit={context.attackCommitTargets} pre={context.preDodgeEnemies} | prior A={combatManager.priorAttack:0.00} D={combatManager.priorDodge:0.00} H={combatManager.priorHeal:0.00} W={combatManager.priorWhirlwind:0.00}";
+    }
+
+    private string CompactDemandPolicyLine()
+    {
+        if (touchManager == null || touchManager.CurrentDemand == null || touchManager.CurrentPolicy == null)
+        {
+            return "demand/policy unavailable";
+        }
+
+        ADUIInteractionDemand demand = touchManager.CurrentDemand;
+        ADUIAdjustmentPolicy policy = touchManager.CurrentPolicy;
+        return $"demand act={demand.actionIntensity:0.00} urg={demand.temporalUrgency:0.00} info={demand.informationPriority:0.00} occ={demand.occlusionRisk:0.00} cont={demand.controlContinuity:0.00} skill={demand.uiSkill:0.00} | err={policy.interactionErrorTolerance:0.00} corr={policy.correctionStrength:0.00}";
     }
 
     private void TrackPlayerBounds()

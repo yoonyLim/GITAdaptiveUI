@@ -211,9 +211,15 @@ public class PlayerController : MonoBehaviour
         Debug.Log("Player stats reset to full.");
     }
 
+    public void SetScenarioHP(int hp)
+    {
+        currentHP = Mathf.Clamp(hp, 1, maxHP);
+        OnHpChanged?.Invoke(currentHP, maxHP);
+    }
+
     public bool TakeDamage(int damage)
     {
-        if (damage <= 0 || IsInvulnerable)
+        if (damage <= 0 || IsInvulnerable || currentHP <= 0)
         {
             return false;
         }
@@ -228,6 +234,7 @@ public class PlayerController : MonoBehaviour
         {
             spumVisual?.PlayDeath();
             Debug.Log("Player Died!");
+            RoguelikeGameManager.Instance?.NotifyPlayerDied();
         }
         else
         {

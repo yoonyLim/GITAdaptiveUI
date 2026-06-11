@@ -97,14 +97,14 @@ public class UserContextPriorModel : MonoBehaviour
             return ADUIContextScenario.ImmediateDodgeThreat;
         }
 
+        if (moving && (riskyClose || context.movingTowardDangerEnemies > 0))
+        {
+            return ADUIContextScenario.MovingUnderPressure;
+        }
+
         if (preDodgeWindow)
         {
             return ADUIContextScenario.PreDodgeWindow;
-        }
-
-        if (moving && riskyClose)
-        {
-            return ADUIContextScenario.MovingUnderPressure;
         }
 
         if (attackCommit)
@@ -195,35 +195,35 @@ public class UserContextPriorModel : MonoBehaviour
         switch (scenario)
         {
             case ADUIContextScenario.AttackOpportunity:
-                return "Attack opportunity";
+                return "공격 기회";
             case ADUIContextScenario.DodgeThreat:
-                return "Dodge threat";
+                return "회피 위협";
             case ADUIContextScenario.LowHpHeal:
-                return "Low HP";
+                return "낮은 HP";
             case ADUIContextScenario.CrowdWhirlwind:
-                return "Enemy crowd";
+                return "적 밀집";
             case ADUIContextScenario.MovementThreat:
-                return "Moving threat";
+                return "이동 중 위협";
             case ADUIContextScenario.LowHpThreat:
-                return "Low HP + threat";
+                return "낮은 HP + 위협";
             case ADUIContextScenario.CrowdLowHp:
-                return "Crowd + low HP";
+                return "적 밀집 + 낮은 HP";
             case ADUIContextScenario.SafeAttackOpportunity:
-                return "Safe attack window";
+                return "안전한 공격 창";
             case ADUIContextScenario.RiskyCloseEnemy:
-                return "Risky close enemy";
+                return "근접 위험";
             case ADUIContextScenario.ImmediateDodgeThreat:
-                return "Immediate dodge threat";
+                return "즉시 회피 위협";
             case ADUIContextScenario.ProjectileDodgeThreat:
-                return "Projectile dodge threat";
+                return "투사체 회피 위협";
             case ADUIContextScenario.MovingUnderPressure:
-                return "Moving under pressure";
+                return "이동 중 압박";
             case ADUIContextScenario.AttackCommitWindow:
-                return "Attack commit window";
+                return "공격 확정 창";
             case ADUIContextScenario.PreDodgeWindow:
-                return "Pre-dodge window";
+                return "회피 준비 창";
             default:
-                return "General";
+                return "일반 상황";
         }
     }
 
@@ -232,35 +232,35 @@ public class UserContextPriorModel : MonoBehaviour
         switch (scenario)
         {
             case ADUIContextScenario.AttackOpportunity:
-                return "Combat calibration: one enemy is close. Use the action you would take now.";
+                return "전투 캘리브레이션: 적 하나가 가까이 있습니다.";
             case ADUIContextScenario.DodgeThreat:
-                return "Combat calibration: an enemy attack and projectile are incoming. Use the action you would take now.";
+                return "전투 캘리브레이션: 적 공격과 투사체가 들어오고 있습니다.";
             case ADUIContextScenario.LowHpHeal:
-                return "Combat calibration: your HP is low and Heal is ready. Use the action you would take now.";
+                return "전투 캘리브레이션: HP가 낮고 Heal을 사용할 수 있습니다.";
             case ADUIContextScenario.CrowdWhirlwind:
-                return "Combat calibration: enemies are clustered inside skill range. Use the action you would take now.";
+                return "전투 캘리브레이션: 적들이 스킬 범위 안에 모여 있습니다.";
             case ADUIContextScenario.MovementThreat:
-                return "Combat calibration: move with the joystick while a melee enemy closes in. Use the action you would take now.";
+                return "전투 캘리브레이션: 조이스틱으로 이동 중이고 근접 적이 다가옵니다.";
             case ADUIContextScenario.LowHpThreat:
-                return "Combat calibration: HP is critical while an attack is incoming. Use the action you would take now.";
+                return "전투 캘리브레이션: HP가 낮은데 공격 위협도 들어오고 있습니다.";
             case ADUIContextScenario.CrowdLowHp:
-                return "Combat calibration: HP is low and enemies are clustered around you. Use the action you would take now.";
+                return "전투 캘리브레이션: HP가 낮고 주변에 적이 모여 있습니다.";
             case ADUIContextScenario.SafeAttackOpportunity:
-                return "Combat calibration: a target is in range and no immediate attack is incoming. Use the action you would take now.";
+                return "전투 캘리브레이션: 적이 공격 범위 안에 있고 즉시 위협은 없습니다.";
             case ADUIContextScenario.RiskyCloseEnemy:
-                return "Combat calibration: an enemy is inside danger range but has not fully attacked yet. Use the action you would take now.";
+                return "전투 캘리브레이션: 적이 위험 거리 안에 있지만 아직 공격은 시작하지 않았습니다.";
             case ADUIContextScenario.ImmediateDodgeThreat:
-                return "Combat calibration: a melee attack is telegraphed or active at close range. Use the action you would take now.";
+                return "전투 캘리브레이션: 근접 공격 예고 또는 공격이 바로 들어오고 있습니다.";
             case ADUIContextScenario.ProjectileDodgeThreat:
-                return "Combat calibration: a projectile is on a collision path. Use the action you would take now.";
+                return "전투 캘리브레이션: 투사체가 충돌 경로로 날아오고 있습니다.";
             case ADUIContextScenario.MovingUnderPressure:
-                return "Combat calibration: you are moving while pressure is closing in. Use the action you would take now.";
+                return "전투 캘리브레이션: 이동 중 압박이 가까워지고 있습니다.";
             case ADUIContextScenario.AttackCommitWindow:
-                return "Combat calibration: a target is inside your attack range and no attack is being telegraphed. Use the action you would take now.";
+                return "전투 캘리브레이션: 적이 공격 범위 안에 있고 공격 예고는 없습니다.";
             case ADUIContextScenario.PreDodgeWindow:
-                return "Combat calibration: a close enemy is about to become dangerous or your movement is carrying you into danger. Use the action you would take now.";
+                return "전투 캘리브레이션: 가까운 적이 곧 위험해지거나 이동 방향이 위험 쪽입니다.";
             default:
-                return "Combat calibration: normal combat state. Use the action you would take now.";
+                return "전투 캘리브레이션: 일반 전투 상황입니다.";
         }
     }
 

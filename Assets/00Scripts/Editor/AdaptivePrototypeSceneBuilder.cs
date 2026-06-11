@@ -13,9 +13,11 @@ public static class AdaptivePrototypeSceneBuilder
     private const string ScenePath = "Assets/Scenes/AdaptivePrototype.unity";
     private const string GeneratedFolderPath = "Assets/00Scripts/Editor/Generated";
     private const string CircleSpriteAssetPath = GeneratedFolderPath + "/AdaptiveHitboxCircle.asset";
-    private const float ActionButtonSize = 124f;
-    private const float ActionButtonHitboxSize = 148f;
-    private const float ActionButtonLabelWidth = 116f;
+    private const float ActionButtonSize = 80f;
+    private const float ActionButtonHitboxSize = 104f;
+    private const float ActionButtonLabelWidth = 74f;
+    private const float ActionButtonClusterCenterOffset = 209f;
+    private const float ActionButtonClusterSpacing = 142f;
 
     [MenuItem("Tools/Adaptive UI/Create Prototype Scene")]
     public static void CreateScene()
@@ -36,10 +38,15 @@ public static class AdaptivePrototypeSceneBuilder
         TextMeshProUGUI contextText = CreateText(canvas.transform, "Detailed Context Text", "Closest: None", new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(520f, -224f), new Vector2(1000f, 34f), 17, TextAlignmentOptions.Left);
         TextMeshProUGUI feedbackText = CreateText(canvas.transform, "Feedback Text", string.Empty, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 52f), new Vector2(700f, 42f), 22, TextAlignmentOptions.Center);
 
-        Image attackImage = CreateActionButton(canvas.transform, "Attack Button", "Attack", new Vector2(1f, 0f), new Vector2(-126f, 126f), new Color(0.95f, 0.22f, 0.18f, 0.88f), out RectTransform attackHitbox, out _);
-        Image dodgeImage = CreateActionButton(canvas.transform, "Dodge Button", "Dodge", new Vector2(1f, 0f), new Vector2(-292f, 126f), new Color(0.12f, 0.58f, 1f, 0.88f), out RectTransform dodgeHitbox, out _);
-        Image healImage = CreateActionButton(canvas.transform, "Heal Button", "Heal", new Vector2(1f, 0f), new Vector2(-126f, 292f), new Color(0.18f, 0.78f, 0.38f, 0.88f), out RectTransform healHitbox, out TextMeshProUGUI healLabel);
-        Image whirlwindImage = CreateActionButton(canvas.transform, "Whirlwind Button", "Whirlwind", new Vector2(1f, 0f), new Vector2(-292f, 292f), new Color(1f, 0.68f, 0.12f, 0.88f), out RectTransform whirlwindHitbox, out TextMeshProUGUI whirlwindLabel);
+        float actionHalfSpacing = ActionButtonClusterSpacing * 0.5f;
+        float actionRightColumnX = -ActionButtonClusterCenterOffset + actionHalfSpacing;
+        float actionLeftColumnX = -ActionButtonClusterCenterOffset - actionHalfSpacing;
+        float actionBottomRowY = ActionButtonClusterCenterOffset - actionHalfSpacing;
+        float actionTopRowY = ActionButtonClusterCenterOffset + actionHalfSpacing;
+        Image attackImage = CreateActionButton(canvas.transform, "Attack Button", "Attack", new Vector2(1f, 0f), new Vector2(actionRightColumnX, actionBottomRowY), new Color(0.95f, 0.22f, 0.18f, 0.88f), out RectTransform attackHitbox, out _);
+        Image dodgeImage = CreateActionButton(canvas.transform, "Dodge Button", "Dodge", new Vector2(1f, 0f), new Vector2(actionLeftColumnX, actionBottomRowY), new Color(0.12f, 0.58f, 1f, 0.88f), out RectTransform dodgeHitbox, out _);
+        Image healImage = CreateActionButton(canvas.transform, "Heal Button", "Heal", new Vector2(1f, 0f), new Vector2(actionRightColumnX, actionTopRowY), new Color(0.18f, 0.78f, 0.38f, 0.88f), out RectTransform healHitbox, out TextMeshProUGUI healLabel);
+        Image whirlwindImage = CreateActionButton(canvas.transform, "Whirlwind Button", "Whirlwind", new Vector2(1f, 0f), new Vector2(actionLeftColumnX, actionTopRowY), new Color(1f, 0.68f, 0.12f, 0.88f), out RectTransform whirlwindHitbox, out TextMeshProUGUI whirlwindLabel);
         RectTransform joystickTouchArea = CreateMovementJoystick(canvas.transform, player);
         Button skipButton = CreateSkipButton(canvas.transform);
         Image adaptiveToggleImage = CreateAdaptiveToggleButton(canvas.transform, out TextMeshProUGUI adaptiveToggleLabel);
@@ -201,7 +208,7 @@ public static class AdaptivePrototypeSceneBuilder
         hitboxImage.raycastTarget = false;
 
         labelText = CreateText(buttonTransform, label + " Text", label, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(ActionButtonLabelWidth, 42f), 22, TextAlignmentOptions.Center);
-        labelText.fontSize = label.Length > 7 ? 14f : 21f;
+        labelText.fontSize = label.Length > 7 ? 10f : 14f;
         labelText.color = Color.white;
 
         return image;

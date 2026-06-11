@@ -5,7 +5,9 @@ public enum ADUIAction
 {
     None,
     Attack,
-    Dodge
+    Dodge,
+    Heal,
+    Whirlwind
 }
 
 public enum ADUIEnemyState

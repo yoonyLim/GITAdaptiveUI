@@ -37,8 +37,13 @@ public class AdaptiveTouchManager : MonoBehaviour
     public Image visualWhirlwindButton;
 
     [Header("Skill Cooldown Labels")]
+    public TextMeshProUGUI attackButtonLabel;
+    public TextMeshProUGUI dodgeButtonLabel;
     public TextMeshProUGUI healButtonLabel;
     public TextMeshProUGUI whirlwindButtonLabel;
+
+    [Header("Adaptive HUD")]
+    public AdaptiveGameHudController gameHud;
 
     [Header("Button Feedback Colors")]
     public Color normalColor = new Color(1f, 1f, 1f, 1f);
@@ -61,6 +66,7 @@ public class AdaptiveTouchManager : MonoBehaviour
 
     [Header("Adaptive Mode Toggle")]
     public bool adaptiveTouchEnabled = true;
+    public bool rawButtonOnlyMode;
     public Image adaptiveToggleButton;
     public TextMeshProUGUI adaptiveToggleLabel;
 
@@ -109,6 +115,7 @@ public class AdaptiveTouchManager : MonoBehaviour
     public ButtonLayoutLogger layoutLogger;
     public HPOutcomeLogger hpOutcomeLogger;
     public ModePolicyLogger modePolicyLogger;
+    public UserEvaluationLogger evaluationLogger;
     public InteractionDemandModel demandModel;
     public AdaptiveUIPolicyEngine policyEngine;
     public AdaptiveUIAdjustmentController adjustmentController;
@@ -148,6 +155,23 @@ public class AdaptiveTouchManager : MonoBehaviour
     private int fourButtonValidationCorrect;
     private float fourButtonValidationDistanceSum;
     private bool fourButtonCalibrationActive;
+    private ADUIInteractionDemand currentDemand = new ADUIInteractionDemand();
+    private ADUIAdjustmentPolicy currentPolicy = new ADUIAdjustmentPolicy();
+    private ADUIContextScenario currentScenario = ADUIContextScenario.General;
+    private string runtimeDebugLine = "decoder idle";
+    private string correctionToastMessage = "";
+    private Color correctionToastColor = Color.white;
+    private float correctionToastUntil;
+    private float debugLineHoldUntil;
+
+    public ADUIInteractionDemand CurrentDemand => currentDemand;
+    public ADUIAdjustmentPolicy CurrentPolicy => currentPolicy;
+    public ADUIContextScenario CurrentScenario => currentScenario;
+    public string RuntimeDebugSummary => runtimeDebugLine;
+    public string RuntimeModeSummary =>
+        currentPolicy != null
+            ? $"{currentPolicy.mode} | scenario={UserContextPriorModel.ScenarioLabel(currentScenario)} | errTol={currentPolicy.interactionErrorTolerance:0.00} correction={currentPolicy.correctionStrength:0.00}"
+            : "mode unavailable";
 
     private void Awake()
     {
@@ -170,16 +194,21 @@ public class AdaptiveTouchManager : MonoBehaviour
             out float whirlwindPrior,
             out ADUIContextScenario scenario);
 
-        UpdateHitboxVisualizer(attackHitboxVisualizer, CalculateDynamicRadius(Square(GetEffectiveSpread(AdaptiveAction.Attack, scenario)), attackPrior), GetEffectiveOffset(AdaptiveAction.Attack, scenario));
-        UpdateHitboxVisualizer(dodgeHitboxVisualizer, CalculateDynamicRadius(Square(GetEffectiveSpread(AdaptiveAction.Dodge, scenario)), dodgePrior), GetEffectiveOffset(AdaptiveAction.Dodge, scenario));
-        UpdateHitboxVisualizer(healHitboxVisualizer, CalculateDynamicRadius(Square(GetEffectiveSpread(AdaptiveAction.Heal, scenario)), healPrior), GetEffectiveOffset(AdaptiveAction.Heal, scenario));
-        UpdateHitboxVisualizer(whirlwindHitboxVisualizer, CalculateDynamicRadius(Square(GetEffectiveSpread(AdaptiveAction.Whirlwind, scenario)), whirlwindPrior), GetEffectiveOffset(AdaptiveAction.Whirlwind, scenario));
+        RefreshRuntimeModel(combatManager, scenario);
+        UpdateIdleDebugLine(attackPrior, dodgePrior, healPrior, whirlwindPrior);
+
+        float policyRadiusScale = currentPolicy != null ? Mathf.Max(1f, currentPolicy.hitboxExpansionRatio) : 1f;
+        UpdateHitboxVisualizer(attackHitboxVisualizer, CalculateDynamicRadius(Square(GetEffectiveSpread(AdaptiveAction.Attack, scenario)), attackPrior) * policyRadiusScale, GetEffectiveOffset(AdaptiveAction.Attack, scenario));
+        UpdateHitboxVisualizer(dodgeHitboxVisualizer, CalculateDynamicRadius(Square(GetEffectiveSpread(AdaptiveAction.Dodge, scenario)), dodgePrior) * policyRadiusScale, GetEffectiveOffset(AdaptiveAction.Dodge, scenario));
+        UpdateHitboxVisualizer(healHitboxVisualizer, CalculateDynamicRadius(Square(GetEffectiveSpread(AdaptiveAction.Heal, scenario)), healPrior) * policyRadiusScale, GetEffectiveOffset(AdaptiveAction.Heal, scenario));
+        UpdateHitboxVisualizer(whirlwindHitboxVisualizer, CalculateDynamicRadius(Square(GetEffectiveSpread(AdaptiveAction.Whirlwind, scenario)), whirlwindPrior) * policyRadiusScale, GetEffectiveOffset(AdaptiveAction.Whirlwind, scenario));
         UpdateModelCenterMarker(attackModelCenterMarker, AdaptiveAction.Attack);
         UpdateModelCenterMarker(dodgeModelCenterMarker, AdaptiveAction.Dodge);
         UpdateModelCenterMarker(healModelCenterMarker, AdaptiveAction.Heal);
         UpdateModelCenterMarker(whirlwindModelCenterMarker, AdaptiveAction.Whirlwind);
         UpdateSkillCooldownLabels(combatManager);
         UpdateAdaptiveModeVisual();
+        UpdateAdaptiveHud(combatManager);
 
 #if UNITY_EDITOR
         if (Mouse.current != null)
@@ -237,16 +266,9 @@ public class AdaptiveTouchManager : MonoBehaviour
         ResolveDecoderPipeline();
 
         CombatManager combatManager = CombatManager.Instance;
-        if (TryExecuteDirectButton(inputPos, combatManager))
-        {
-            return;
-        }
-
-        if (!adaptiveTouchEnabled)
-        {
-            return;
-        }
-
+        long touchMs = NowMs();
+        int playerHpBefore = CurrentPlayerHp(combatManager);
+        int enemyHpBefore = CurrentEnemyHp(combatManager);
         GetAdjustedActionPriors(
             combatManager,
             out float attackPrior,
@@ -254,6 +276,23 @@ public class AdaptiveTouchManager : MonoBehaviour
             out float healPrior,
             out float whirlwindPrior,
             out ADUIContextScenario scenario);
+        RefreshRuntimeModel(combatManager, scenario);
+
+        if (TryExecuteDirectButton(inputPos, combatManager))
+        {
+            return;
+        }
+
+        if (rawButtonOnlyMode)
+        {
+            RejectRawButtonMiss(inputPos, combatManager, playerHpBefore, enemyHpBefore, touchMs);
+            return;
+        }
+
+        if (!adaptiveTouchEnabled)
+        {
+            return;
+        }
 
         List<ActionCandidate> candidates = new List<ActionCandidate>(4);
 
@@ -277,9 +316,15 @@ public class AdaptiveTouchManager : MonoBehaviour
             }
         }
 
-        float threshold = Mathf.Max(0.0001f, minLikelihoodThreshold * 0.5f);
+        float threshold = EffectivePosteriorThreshold();
         if (best.posterior < threshold)
         {
+            float rejectedGap = PosteriorGap(candidates, best);
+            string reason = $"rejected_low_confidence<{threshold:F3}";
+            SetDecisionFeedback("Rejected: low confidence", new Color(0.82f, 0.82f, 0.82f, 1f));
+            UpdateRuntimeDebugLine(candidates, best, threshold, rejectedGap, reason);
+            demandModel?.UpdateRecentErrorSignals(true, rejectedGap < EffectiveAmbiguityGap());
+            LogFourButtonDecision(inputPos, candidates, best.action, false, true, reason, playerHpBefore, enemyHpBefore, touchMs, NowMs());
             Debug.Log($"[Adaptive Touch] Rejected. Best posterior {best.posterior:F4} below {threshold:F4}. {FormatCandidatePosteriors(candidates)}");
             return;
         }
@@ -290,7 +335,19 @@ public class AdaptiveTouchManager : MonoBehaviour
 
         RecordActionTouch(best.image, inputPos);
         bool executed = ExecuteAction(best.action, combatManager);
+        UpdateRecentActionRate();
         float posteriorGap = PosteriorGap(candidates, best);
+        string safetyReason = posteriorGap < EffectiveAmbiguityGap()
+            ? "correction_allowed_ambiguous"
+            : "correction_allowed";
+        SetDecisionFeedback(
+            $"Corrected: {best.label}",
+            currentPolicy != null && currentPolicy.mode == ADUIInteractionMode.CognitiveFirst
+                ? new Color(0.48f, 0.76f, 1f, 1f)
+                : new Color(1f, 0.78f, 0.24f, 1f));
+        UpdateRuntimeDebugLine(candidates, best, threshold, posteriorGap, safetyReason);
+        demandModel?.UpdateRecentErrorSignals(!executed, posteriorGap < EffectiveAmbiguityGap());
+        LogFourButtonDecision(inputPos, candidates, best.action, executed, !executed, safetyReason, playerHpBefore, enemyHpBefore, touchMs, NowMs());
         if (executed && best.likelihood >= 0.7f)
         {
             AddOnlineFourButtonCalibrationSample(best.action, inputPos, 0.12f, scenario);
@@ -330,14 +387,18 @@ public class AdaptiveTouchManager : MonoBehaviour
         }
 
         float likelihood = CalculateContextAwareGaussianLikelihood(action, scenario, inputPos, image, out int contextSamples, out float contextBlend);
+        float priorExponent = currentPolicy != null
+            ? Mathf.Lerp(0.88f, 1.38f, Mathf.Clamp01(currentPolicy.correctionStrength))
+            : 1f;
+        float policyPrior = Mathf.Pow(Mathf.Clamp(prior, 0.0001f, 1f), priorExponent);
         candidates.Add(new ActionCandidate
         {
             action = action,
             label = label,
             image = image,
-            prior = Mathf.Clamp01(prior),
+            prior = Mathf.Clamp01(policyPrior),
             likelihood = likelihood,
-            posterior = likelihood * Mathf.Clamp01(prior),
+            posterior = likelihood * Mathf.Clamp01(policyPrior),
             contextSamples = contextSamples,
             contextBlend = contextBlend
         });
@@ -651,6 +712,12 @@ public class AdaptiveTouchManager : MonoBehaviour
             return false;
         }
 
+        if (rawButtonOnlyMode)
+        {
+            SetDecisionFeedback("기본 버튼 조건에서는 자동 보정이 꺼져 있습니다.", new Color(0.82f, 0.82f, 0.82f, 1f));
+            return true;
+        }
+
         SetAdaptiveTouchEnabled(!adaptiveTouchEnabled);
         return true;
     }
@@ -658,6 +725,17 @@ public class AdaptiveTouchManager : MonoBehaviour
     public void SetAdaptiveTouchEnabled(bool enabled)
     {
         adaptiveTouchEnabled = enabled;
+        UpdateAdaptiveModeVisual();
+    }
+
+    public void SetRawButtonOnlyMode(bool enabled)
+    {
+        rawButtonOnlyMode = enabled;
+        if (enabled)
+        {
+            adaptiveTouchEnabled = false;
+        }
+
         UpdateAdaptiveModeVisual();
     }
 
@@ -686,18 +764,38 @@ public class AdaptiveTouchManager : MonoBehaviour
             return false;
         }
 
+        long touchMs = NowMs();
+        int playerHpBefore = CurrentPlayerHp(combatManager);
+        int enemyHpBefore = CurrentEnemyHp(combatManager);
         RecordActionTouch(image, inputPos);
 
         if (IsSkillCoolingDown(action, combatManager))
         {
             ReportCooldownBlocked(action, combatManager);
+            UpdateRecentActionRate();
+            demandModel?.UpdateRecentErrorSignals(true, true);
+            SetDecisionFeedback("Rejected: cooldown", new Color(0.82f, 0.82f, 0.82f, 1f));
+            runtimeDebugLine = $"direct {label} rejected | safety=cooldown_blocked | mode={currentPolicy.mode}";
+            debugLineHoldUntil = Time.time + 1.5f;
+            LogFourButtonDecision(inputPos, null, action, false, true, "cooldown_blocked", playerHpBefore, enemyHpBefore, touchMs, NowMs());
             return true;
         }
 
         image.color = Color.Lerp(GetBaseColor(action), pressedColor, 0.55f);
         Debug.Log($"[Adaptive Touch] {label} direct button tap accepted.");
         bool executed = ExecuteAction(action, combatManager);
-        if (executed)
+        UpdateRecentActionRate();
+        demandModel?.UpdateRecentErrorSignals(!executed, false);
+        string directReason = rawButtonOnlyMode
+            ? "raw_direct_button"
+            : executed ? "preserve_clear_button" : "action_failed";
+        SetDecisionFeedback(
+            executed ? (rawButtonOnlyMode ? $"기본 입력: {label}" : $"Preserved: {label}") : $"Rejected: {label}",
+            executed ? Color.white : new Color(0.82f, 0.82f, 0.82f, 1f));
+        runtimeDebugLine = $"direct {label} {(executed ? "preserved" : "rejected")} | safety={directReason} | mode={currentPolicy.mode}";
+        debugLineHoldUntil = Time.time + 1.5f;
+        LogFourButtonDecision(inputPos, null, action, executed, !executed, directReason, playerHpBefore, enemyHpBefore, touchMs, NowMs());
+        if (executed && !rawButtonOnlyMode)
         {
             if (userContextPriorModel != null && combatManager != null)
             {
@@ -712,6 +810,48 @@ public class AdaptiveTouchManager : MonoBehaviour
         }
 
         return true;
+    }
+
+    private void RejectRawButtonMiss(
+        Vector2 inputPos,
+        CombatManager combatManager,
+        int playerHpBefore,
+        int enemyHpBefore,
+        long touchMs)
+    {
+        AdaptiveAction nearest = NearestAction(inputPos);
+        float gap = 0f;
+        SetDecisionFeedback("거절: 버튼 밖 터치", new Color(0.82f, 0.82f, 0.82f, 1f));
+        runtimeDebugLine = $"raw miss nearest={nearest} | safety=raw_miss_outside_button | mode={currentPolicy.mode}";
+        debugLineHoldUntil = Time.time + 1.5f;
+        demandModel?.UpdateRecentErrorSignals(true, true);
+        LogFourButtonDecision(inputPos, null, nearest, false, true, "raw_miss_outside_button", playerHpBefore, enemyHpBefore, touchMs, NowMs());
+        Debug.Log($"[Adaptive Touch] Raw button miss rejected. nearest={nearest}, gap={gap:F2}");
+    }
+
+    private AdaptiveAction NearestAction(Vector2 inputPos)
+    {
+        AdaptiveAction nearest = AdaptiveAction.Attack;
+        float bestSqrDistance = float.PositiveInfinity;
+        for (int i = 0; i < 4; i++)
+        {
+            AdaptiveAction action = (AdaptiveAction)i;
+            Image image = ImageForAction(action);
+            if (image == null)
+            {
+                continue;
+            }
+
+            Vector2 center = image.rectTransform.position;
+            float sqrDistance = (inputPos - center).sqrMagnitude;
+            if (sqrDistance < bestSqrDistance)
+            {
+                bestSqrDistance = sqrDistance;
+                nearest = action;
+            }
+        }
+
+        return nearest;
     }
 
     private bool IsInsideCircularActionButton(Image image, Vector2 screenPosition)
@@ -1431,12 +1571,16 @@ public class AdaptiveTouchManager : MonoBehaviour
     {
         if (adaptiveToggleLabel != null)
         {
-            adaptiveToggleLabel.text = adaptiveTouchEnabled ? "Adaptive: ON" : "Adaptive: OFF";
+            adaptiveToggleLabel.text = rawButtonOnlyMode
+                ? "Mode: RAW"
+                : adaptiveTouchEnabled ? "Adaptive: ON" : "Adaptive: OFF";
         }
 
         if (adaptiveToggleButton != null)
         {
-            adaptiveToggleButton.color = adaptiveTouchEnabled
+            adaptiveToggleButton.color = rawButtonOnlyMode
+                ? new Color(0.32f, 0.34f, 0.36f, 0.92f)
+                : adaptiveTouchEnabled
                 ? new Color(0.18f, 0.72f, 0.44f, 0.92f)
                 : new Color(0.32f, 0.34f, 0.36f, 0.92f);
         }
@@ -1446,20 +1590,35 @@ public class AdaptiveTouchManager : MonoBehaviour
     {
         PlayerController player = combatManager != null ? combatManager.playerController : null;
 
+        if (attackButtonLabel != null)
+        {
+            bool attackWindow = currentScenario == ADUIContextScenario.AttackCommitWindow ||
+                                (combatManager != null && combatManager.CurrentContext.attackCommitTargets > 0);
+            attackButtonLabel.text = attackWindow ? "Attack\nOPEN" : "Attack\nReady";
+            attackButtonLabel.fontSize = 17f;
+        }
+
+        if (dodgeButtonLabel != null)
+        {
+            bool urgentDodge = currentDemand != null && currentDemand.temporalUrgency >= 0.55f;
+            dodgeButtonLabel.text = urgentDodge ? "Dodge\nNOW" : "Dodge\nReady";
+            dodgeButtonLabel.fontSize = 17f;
+        }
+
         if (healButtonLabel != null)
         {
             healButtonLabel.text = player != null && player.HealCooldownRemaining > 0f
-                ? $"{player.HealCooldownRemaining:F1}s"
-                : "Heal";
-            healButtonLabel.fontSize = player != null && player.HealCooldownRemaining > 0f ? 28f : 24f;
+                ? $"Heal\n{player.HealCooldownRemaining:F1}s"
+                : "Heal\nReady";
+            healButtonLabel.fontSize = 17f;
         }
 
         if (whirlwindButtonLabel != null)
         {
             whirlwindButtonLabel.text = player != null && player.WhirlwindCooldownRemaining > 0f
-                ? $"{player.WhirlwindCooldownRemaining:F1}s"
-                : "Whirlwind";
-            whirlwindButtonLabel.fontSize = player != null && player.WhirlwindCooldownRemaining > 0f ? 28f : 17f;
+                ? $"Whirl\n{player.WhirlwindCooldownRemaining:F1}s"
+                : "Whirl\nReady";
+            whirlwindButtonLabel.fontSize = 17f;
         }
     }
 
@@ -1506,6 +1665,11 @@ public class AdaptiveTouchManager : MonoBehaviour
         }
 
         contextBlend = ContextProfileBlend(contextSamples);
+        if (currentPolicy != null)
+        {
+            float blendScale = Mathf.Lerp(0.62f, 1.45f, Mathf.Clamp01(currentPolicy.interactionErrorTolerance));
+            contextBlend = Mathf.Clamp01(contextBlend * blendScale);
+        }
         Vector2 contextCenter = GetContextCalibratedCenter(action, scenario, image);
         float contextLikelihood = CalculateGaussianLikelihood(
             inputPos,
@@ -1807,14 +1971,27 @@ public class AdaptiveTouchManager : MonoBehaviour
             {
                 adjustmentController = FindAnyObjectByType<AdaptiveUIAdjustmentController>();
             }
+            if (adjustmentController == null && autoCreateDecoderPipeline)
+            {
+                adjustmentController = gameObject.AddComponent<AdaptiveUIAdjustmentController>();
+            }
         }
 
         if (adjustmentController != null)
         {
             adjustmentController.attackButtonImage = visualAttackButton;
             adjustmentController.dodgeButtonImage = visualDodgeButton;
+            adjustmentController.healButtonImage = visualHealButton;
+            adjustmentController.whirlwindButtonImage = visualWhirlwindButton;
             adjustmentController.attackButtonRoot = visualAttackButton != null ? visualAttackButton.rectTransform : null;
             adjustmentController.dodgeButtonRoot = visualDodgeButton != null ? visualDodgeButton.rectTransform : null;
+            adjustmentController.healButtonRoot = visualHealButton != null ? visualHealButton.rectTransform : null;
+            adjustmentController.whirlwindButtonRoot = visualWhirlwindButton != null ? visualWhirlwindButton.rectTransform : null;
+        }
+
+        if (gameHud == null)
+        {
+            gameHud = FindAnyObjectByType<AdaptiveGameHudController>();
         }
 
         if (feedbackController == null)
@@ -1849,6 +2026,11 @@ public class AdaptiveTouchManager : MonoBehaviour
                                     enemyState == ADUIEnemyState.Attacking ||
                                     enemyState == ADUIEnemyState.Urgent;
 
+        if (demandModel != null && combatManager != null)
+        {
+            return demandModel.Evaluate(combatManager.CurrentContext, combatManager.playerController, recentActionRate);
+        }
+
         if (demandModel != null)
         {
             return demandModel.Evaluate(enemyState, dangerWarningVisible, normalizedHp, recentActionRate);
@@ -1862,7 +2044,7 @@ public class AdaptiveTouchManager : MonoBehaviour
             occlusionRisk = dangerWarningVisible ? 0.7f : 0.35f,
             controlContinuity = Mathf.Clamp01(0.4f + recentActionRate * 0.4f),
             uiSkill = 0.75f,
-            mode = dangerWarningVisible ? ADUIInteractionMode.ActionFirst : ADUIInteractionMode.LearningReview
+            mode = dangerWarningVisible ? ADUIInteractionMode.ActionFirst : ADUIInteractionMode.CognitiveFirst
         };
     }
 
@@ -1887,9 +2069,325 @@ public class AdaptiveTouchManager : MonoBehaviour
     private void ApplyPolicy(ADUIAdjustmentPolicy policy)
     {
         adjustmentController?.ApplyPolicy(policy);
-        if (safetyGate != null)
+        if (decoder != null && policy != null)
+        {
+            float errorTolerance = Mathf.Clamp01(policy.interactionErrorTolerance);
+            decoder.ambiguityMarginPx = policy.ambiguityMarginPx;
+            decoder.tau = Mathf.Lerp(0.62f, 0.48f, errorTolerance);
+            decoder.delta = Mathf.Lerp(0.16f, 0.055f, errorTolerance);
+            decoder.priorStrength = Mathf.Lerp(0.85f, 1.35f, Mathf.Clamp01(policy.correctionStrength));
+            decoder.minLikelihoodThreshold = EffectivePosteriorThreshold();
+            decoder.recoverableRadiusMultiplier = Mathf.Lerp(1.35f, 2.05f, errorTolerance);
+        }
+
+        if (safetyGate != null && policy != null)
         {
             safetyGate.preserveClearInsideButtonInput = policy.preserveClearInput;
+            safetyGate.recoverableRadiusMultiplier = Mathf.Lerp(1.35f, 2.05f, Mathf.Clamp01(policy.interactionErrorTolerance));
+        }
+    }
+
+    private void RefreshRuntimeModel(CombatManager combatManager, ADUIContextScenario scenario)
+    {
+        currentScenario = scenario;
+        currentDemand = BuildDemand(CurrentEnemyState(), CurrentPlayerHp(combatManager), combatManager);
+        currentPolicy = BuildPolicy(currentDemand);
+        ApplyPolicy(currentPolicy);
+    }
+
+    private void UpdateAdaptiveHud(CombatManager combatManager)
+    {
+        if (gameHud == null)
+        {
+            gameHud = FindAnyObjectByType<AdaptiveGameHudController>();
+        }
+
+        if (gameHud == null)
+        {
+            return;
+        }
+
+        bool toastVisible = Time.time < correctionToastUntil && !string.IsNullOrEmpty(correctionToastMessage);
+        PlayerController player = combatManager != null ? combatManager.playerController : null;
+        gameHud.ApplyRuntimeState(
+            player,
+            currentDemand,
+            currentPolicy,
+            currentScenario,
+            runtimeDebugLine,
+            correctionToastMessage,
+            correctionToastColor,
+            toastVisible);
+    }
+
+    private void UpdateIdleDebugLine(float attackPrior, float dodgePrior, float healPrior, float whirlwindPrior)
+    {
+        if (Time.time < debugLineHoldUntil)
+        {
+            return;
+        }
+
+        runtimeDebugLine =
+            $"decoder idle | mode={currentPolicy.mode} scenario={UserContextPriorModel.ScenarioLabel(currentScenario)} | " +
+            $"prior A={attackPrior:0.00} D={dodgePrior:0.00} H={healPrior:0.00} W={whirlwindPrior:0.00} | " +
+            $"threshold={EffectivePosteriorThreshold():0.000} safety=waiting";
+    }
+
+    private float EffectivePosteriorThreshold()
+    {
+        float errorTolerance = currentPolicy != null ? Mathf.Clamp01(currentPolicy.interactionErrorTolerance) : 0.5f;
+        return Mathf.Max(0.0001f, minLikelihoodThreshold * Mathf.Lerp(0.78f, 0.34f, errorTolerance));
+    }
+
+    private float EffectiveAmbiguityGap()
+    {
+        float errorTolerance = currentPolicy != null ? Mathf.Clamp01(currentPolicy.interactionErrorTolerance) : 0.5f;
+        return Mathf.Lerp(0.12f, 0.045f, errorTolerance);
+    }
+
+    private void SetDecisionFeedback(string message, Color color)
+    {
+        correctionToastMessage = message;
+        correctionToastColor = color;
+        correctionToastUntil = Time.time + 1.35f;
+    }
+
+    private void UpdateRuntimeDebugLine(
+        List<ActionCandidate> candidates,
+        ActionCandidate best,
+        float threshold,
+        float posteriorGap,
+        string safetyReason)
+    {
+        runtimeDebugLine =
+            $"prior/posterior {FormatCandidatePosteriors(candidates)} | " +
+            $"best={best.label} gap={posteriorGap:0.000} threshold={threshold:0.000} | " +
+            $"safety={safetyReason} mode={currentPolicy.mode}";
+        debugLineHoldUntil = Time.time + 1.8f;
+    }
+
+    private void LogFourButtonDecision(
+        Vector2 inputPos,
+        List<ActionCandidate> candidates,
+        AdaptiveAction resolvedAction,
+        bool executed,
+        bool invalidTouch,
+        string safetyReason,
+        int playerHpBefore,
+        int enemyHpBefore,
+        long touchMs,
+        long actionMs)
+    {
+        int trialId = trialScenarioManager != null ? trialScenarioManager.currentTrialId : 0;
+        ADUIDecodeInput input = null;
+        ADUIDecodeResult result = null;
+
+        if (enableRuntimeLogging || evaluationLogger != null)
+        {
+            input = BuildFourButtonDecodeInput(inputPos);
+            result = BuildFourButtonDecodeResult(input, candidates, resolvedAction, executed, invalidTouch, safetyReason);
+        }
+
+        if (enableRuntimeLogging && input != null && result != null)
+        {
+            LogTrialRecord(
+                trialId,
+                touchMs,
+                actionMs,
+                inputPos,
+                input,
+                result,
+                currentDemand,
+                currentPolicy,
+                playerHpBefore,
+                CurrentPlayerHp(CombatManager.Instance),
+                enemyHpBefore,
+                CurrentEnemyHp(CombatManager.Instance),
+                executed);
+        }
+
+        if (evaluationLogger != null && input != null && result != null)
+        {
+            evaluationLogger.LogTouchDecision(
+                trialId,
+                input,
+                result,
+                currentDemand,
+                currentPolicy,
+                currentScenario,
+                playerHpBefore,
+                CurrentPlayerHp(CombatManager.Instance),
+                enemyHpBefore,
+                CurrentEnemyHp(CombatManager.Instance));
+        }
+
+        if (enableRuntimeLogging && modePolicyLogger != null)
+        {
+            modePolicyLogger.Log(trialId, currentDemand, currentPolicy);
+        }
+    }
+
+    private ADUIDecodeInput BuildFourButtonDecodeInput(Vector2 inputPos)
+    {
+        float expansion = currentPolicy != null ? Mathf.Max(1f, currentPolicy.hitboxExpansionRatio) : 1.25f;
+        return new ADUIDecodeInput
+        {
+            touchPosition = inputPos,
+            attackButton = GeometryForImage("Attack", visualAttackButton, expansion),
+            dodgeButton = GeometryForImage("Dodge", visualDodgeButton, expansion),
+            enemyState = CurrentEnemyState(),
+            condition = CurrentCondition()
+        };
+    }
+
+    private ADUIButtonGeometry GeometryForImage(string actionName, Image image, float expansion)
+    {
+        if (image != null)
+        {
+            return ADUIButtonGeometry.FromRect(actionName, image.rectTransform, expansion);
+        }
+
+        return new ADUIButtonGeometry
+        {
+            action = actionName,
+            centerX = 0f,
+            centerY = 0f,
+            visualRadius = 1f,
+            hitboxRadius = Mathf.Max(1f, expansion)
+        };
+    }
+
+    private ADUIDecodeResult BuildFourButtonDecodeResult(
+        ADUIDecodeInput input,
+        List<ActionCandidate> candidates,
+        AdaptiveAction resolvedAction,
+        bool executed,
+        bool invalidTouch,
+        string safetyReason)
+    {
+        ADUIAction mappedAction = invalidTouch || !executed ? ADUIAction.None : MapAction(resolvedAction);
+        ADUIAction bayesianAction = invalidTouch ? MapAction(resolvedAction) : mappedAction;
+        var result = new ADUIDecodeResult
+        {
+            distanceToAttack = Vector2.Distance(input.touchPosition, input.attackButton.Center),
+            distanceToDodge = Vector2.Distance(input.touchPosition, input.dodgeButton.Center),
+            varianceAttack = Square(GetEffectiveSpread(AdaptiveAction.Attack, currentScenario)),
+            varianceDodge = Square(GetEffectiveSpread(AdaptiveAction.Dodge, currentScenario)),
+            tau = EffectivePosteriorThreshold(),
+            delta = EffectiveAmbiguityGap(),
+            priorStrength = currentPolicy != null ? currentPolicy.correctionStrength : 0.5f,
+            invalidTouch = invalidTouch,
+            safetyGatePassed = !invalidTouch && safetyReason.StartsWith("correction"),
+            safetyGateReason = safetyReason,
+            finalExecutedAction = mappedAction,
+            bayesianPrediction = bayesianAction,
+            userGaussianPrediction = bayesianAction,
+            contextPriorOnlyPrediction = bayesianAction,
+            visualBoundaryPrediction = candidates == null ? mappedAction : ADUIAction.None,
+            expandedHitboxPrediction = candidates == null ? mappedAction : ADUIAction.None
+        };
+
+        if (candidates == null || candidates.Count == 0)
+        {
+            ApplyDirectResultScores(result, resolvedAction, invalidTouch);
+            return result;
+        }
+
+        float totalPosterior = 0f;
+        ActionCandidate best = candidates[0];
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            totalPosterior += Mathf.Max(0f, candidates[i].posterior);
+            if (candidates[i].posterior > best.posterior)
+            {
+                best = candidates[i];
+            }
+        }
+
+        if (TryFindCandidate(candidates, AdaptiveAction.Attack, out ActionCandidate attackCandidate))
+        {
+            result.likelihoodAttack = attackCandidate.likelihood;
+            result.priorAttack = attackCandidate.prior;
+            result.posteriorAttack = totalPosterior > 0f ? attackCandidate.posterior / totalPosterior : 0f;
+        }
+
+        if (TryFindCandidate(candidates, AdaptiveAction.Dodge, out ActionCandidate dodgeCandidate))
+        {
+            result.likelihoodDodge = dodgeCandidate.likelihood;
+            result.priorDodge = dodgeCandidate.prior;
+            result.posteriorDodge = totalPosterior > 0f ? dodgeCandidate.posterior / totalPosterior : 0f;
+        }
+
+        float bestNormalized = totalPosterior > 0f ? best.posterior / totalPosterior : 0f;
+        float runnerUp = 0f;
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            if (candidates[i].label == best.label)
+            {
+                continue;
+            }
+
+            runnerUp = Mathf.Max(runnerUp, totalPosterior > 0f ? candidates[i].posterior / totalPosterior : 0f);
+        }
+
+        result.maxPosterior = bestNormalized;
+        result.posteriorGap = Mathf.Max(0f, bestNormalized - runnerUp);
+        result.isAmbiguous = result.posteriorGap < EffectiveAmbiguityGap();
+        result.isNearBoundary = result.isAmbiguous;
+        result.bayesianPrediction = MapAction(best.action);
+        result.userGaussianPrediction = MapAction(best.action);
+        result.contextPriorOnlyPrediction = MapAction(best.action);
+        return result;
+    }
+
+    private void ApplyDirectResultScores(ADUIDecodeResult result, AdaptiveAction action, bool invalidTouch)
+    {
+        bool attack = action == AdaptiveAction.Attack;
+        bool dodge = action == AdaptiveAction.Dodge;
+        result.likelihoodAttack = attack ? 1f : 0f;
+        result.likelihoodDodge = dodge ? 1f : 0f;
+        result.priorAttack = attack ? 1f : 0f;
+        result.priorDodge = dodge ? 1f : 0f;
+        result.posteriorAttack = attack ? 1f : 0f;
+        result.posteriorDodge = dodge ? 1f : 0f;
+        result.maxPosterior = invalidTouch ? 0f : 1f;
+        result.posteriorGap = invalidTouch ? 0f : 1f;
+        result.isAmbiguous = false;
+        result.isNearBoundary = false;
+    }
+
+    private bool TryFindCandidate(List<ActionCandidate> candidates, AdaptiveAction action, out ActionCandidate candidate)
+    {
+        candidate = new ActionCandidate();
+        if (candidates == null)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            if (candidates[i].action == action)
+            {
+                candidate = candidates[i];
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private ADUIAction MapAction(AdaptiveAction action)
+    {
+        switch (action)
+        {
+            case AdaptiveAction.Dodge:
+                return ADUIAction.Dodge;
+            case AdaptiveAction.Heal:
+                return ADUIAction.Heal;
+            case AdaptiveAction.Whirlwind:
+                return ADUIAction.Whirlwind;
+            default:
+                return ADUIAction.Attack;
         }
     }
 
@@ -1965,6 +2463,16 @@ public class AdaptiveTouchManager : MonoBehaviour
         if (string.Equals(value, "Dodge", System.StringComparison.OrdinalIgnoreCase))
         {
             return ADUIAction.Dodge;
+        }
+
+        if (string.Equals(value, "Heal", System.StringComparison.OrdinalIgnoreCase))
+        {
+            return ADUIAction.Heal;
+        }
+
+        if (string.Equals(value, "Whirlwind", System.StringComparison.OrdinalIgnoreCase))
+        {
+            return ADUIAction.Whirlwind;
         }
 
         return ADUIAction.None;

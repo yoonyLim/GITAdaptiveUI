@@ -22,47 +22,53 @@ public class AdaptiveUIPolicyEngine : MonoBehaviour
 
     public ADUIAdjustmentPolicy BuildPolicy(ADUIInteractionDemand demand)
     {
+        ADUIInteractionMode runtimeMode = RuntimeMode(demand.mode);
+        float errorTolerance = runtimeMode == ADUIInteractionMode.ActionFirst
+            ? Mathf.Clamp01(Mathf.Max(demand.ErrorToleranceNeed, 0.55f + demand.temporalUrgency * 0.25f))
+            : Mathf.Clamp01(Mathf.Min(demand.ErrorToleranceNeed, 0.32f + demand.CognitiveNeed * 0.12f));
+
         var policy = new ADUIAdjustmentPolicy
         {
-            mode = demand.mode,
+            mode = runtimeMode,
             visibility = 1f,
             emphasis = 0.55f,
             density = 0.5f,
             positionConstraint = 0.8f,
-            interactionErrorTolerance = demand.ErrorToleranceNeed,
+            interactionErrorTolerance = errorTolerance,
             feedbackIntensity = 0.5f,
             correctionStrength = 0.5f,
             hitboxExpansionRatio = 1.25f,
-            ambiguityMarginPx = Mathf.Lerp(40f, 90f, demand.ErrorToleranceNeed),
+            ambiguityMarginPx = Mathf.Lerp(34f, 96f, errorTolerance),
             preserveClearInput = true,
             hapticEnabled = false,
             showGuidance = false,
             showReview = false
         };
 
-        switch (demand.mode)
+        switch (runtimeMode)
         {
             case ADUIInteractionMode.ActionFirst:
                 policy.visibility = 1f;
-                policy.emphasis = Mathf.Lerp(0.6f, 0.9f, demand.temporalUrgency);
-                policy.density = 0.35f;
-                policy.positionConstraint = 0.9f;
+                policy.emphasis = Mathf.Lerp(0.68f, 0.94f, Mathf.Max(demand.temporalUrgency, demand.actionIntensity));
+                policy.density = Mathf.Lerp(0.32f, 0.46f, demand.temporalUrgency);
+                policy.positionConstraint = 0.92f;
                 policy.feedbackIntensity = actionFirstFeedbackIntensity;
-                policy.correctionStrength = actionFirstCorrectionStrength;
-                policy.hitboxExpansionRatio = Mathf.Lerp(1.15f, actionFirstHitboxExpansion, demand.ErrorToleranceNeed);
+                policy.correctionStrength = Mathf.Clamp01(Mathf.Max(actionFirstCorrectionStrength, 0.62f + demand.temporalUrgency * 0.18f));
+                policy.hitboxExpansionRatio = Mathf.Lerp(1.18f, actionFirstHitboxExpansion, errorTolerance);
                 policy.hapticEnabled = demand.temporalUrgency >= 0.75f;
-                policy.policyReason = "action_first: urgency/action density requires conservative error tolerance";
+                policy.policyReason = "action_first: high urgency or action density allows stronger ambiguity correction";
                 break;
 
             case ADUIInteractionMode.CognitiveFirst:
-                policy.visibility = cognitiveVisibility;
-                policy.emphasis = 0.5f;
-                policy.density = cognitiveDensity;
-                policy.positionConstraint = cognitivePositionConstraint;
+                policy.visibility = Mathf.Clamp01(Mathf.Max(cognitiveVisibility, 0.88f + demand.informationPriority * 0.1f));
+                policy.emphasis = Mathf.Lerp(0.46f, 0.68f, demand.CognitiveNeed);
+                policy.density = Mathf.Lerp(cognitiveDensity, 0.58f, demand.CognitiveNeed);
+                policy.positionConstraint = Mathf.Clamp(cognitivePositionConstraint, 0.94f, 1f);
                 policy.feedbackIntensity = 0.35f;
-                policy.correctionStrength = 0.35f;
-                policy.hitboxExpansionRatio = 1.15f;
-                policy.policyReason = "cognitive_first: reduce clutter and protect information visibility";
+                policy.correctionStrength = Mathf.Lerp(0.22f, 0.4f, errorTolerance);
+                policy.hitboxExpansionRatio = Mathf.Lerp(1.04f, 1.14f, errorTolerance);
+                policy.ambiguityMarginPx = Mathf.Lerp(28f, 52f, errorTolerance);
+                policy.policyReason = "cognitive_first: preserve direct intent and prioritize readable combat information";
                 break;
 
             case ADUIInteractionMode.GuidanceProcedure:
@@ -92,6 +98,14 @@ public class AdaptiveUIPolicyEngine : MonoBehaviour
         }
 
         return policy;
+    }
+
+    private ADUIInteractionMode RuntimeMode(ADUIInteractionMode mode)
+    {
+        return mode == ADUIInteractionMode.CognitiveFirst ||
+               mode == ADUIInteractionMode.LearningReview
+            ? ADUIInteractionMode.CognitiveFirst
+            : ADUIInteractionMode.ActionFirst;
     }
 }
 

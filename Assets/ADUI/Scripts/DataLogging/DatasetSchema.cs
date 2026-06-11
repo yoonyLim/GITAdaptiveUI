@@ -14,6 +14,9 @@ public static class DatasetSchema
     public const string ConditionContextPriorOnly = "context_prior_only";
     public const string ConditionContextBayesianNoSafety = "context_bayesian_no_safety";
     public const string ConditionContextBayesianSafety = "context_bayesian_safety";
+    public const string ConditionRawButton = "raw_button";
+    public const string ConditionNoCalibrationContextBayesian = "no_calibration_context_bayesian";
+    public const string ConditionCalibratedContextBayesian = "calibrated_context_bayesian";
 
     public static readonly string[] Conditions =
     {
@@ -315,4 +318,76 @@ public class ADUIVisionFrameRecord
     public string attack_bbox = "";
     public string dodge_bbox = "";
     public string label_source = "";
+}
+
+[Serializable]
+public class ADUIEvaluationTouchRecord
+{
+    public string session_id = "";
+    public string participant_id = "";
+    public string condition = "";
+    public int stage_number;
+    public string stage_label = "";
+    public int trial_id;
+    public long timestamp_ms;
+    public string scenario = "";
+    public string interaction_mode = "";
+    public string expected_action = "";
+    public string final_action = "";
+    public bool expected_match;
+    public bool invalid_touch;
+    public bool rejected;
+    public bool preserved_clear_input;
+    public bool corrected;
+    public bool ambiguous;
+    public bool cooldown_wasted;
+    public bool safety_gate_passed;
+    public string safety_gate_reason = "";
+    public float posterior_attack;
+    public float posterior_dodge;
+    public float posterior_gap;
+    public float max_posterior;
+    public float policy_error_tolerance;
+    public float policy_correction_strength;
+    public float touch_x;
+    public float touch_y;
+    public int player_hp_before;
+    public int player_hp_after;
+    public int damage_taken;
+    public int enemy_hp_before;
+    public int enemy_hp_after;
+    public int damage_dealt;
+}
+
+[Serializable]
+public class ADUIEvaluationStageSummary
+{
+    public string session_id = "";
+    public string participant_id = "";
+    public string condition = "";
+    public int stage_number;
+    public string stage_label = "";
+    public bool skipped;
+    public bool failed;
+    public float duration_seconds;
+    public int button_presses;
+    public int touch_events;
+    public int expected_match_count;
+    public int mis_touch_count;
+    public int invalid_touch_count;
+    public int rejected_count;
+    public int preserved_count;
+    public int corrected_count;
+    public int ambiguous_count;
+    public int cooldown_wasted_count;
+    public int action_first_count;
+    public int cognitive_first_count;
+    public int damage_taken;
+    public int healing_done;
+    public int final_hp;
+    public int enemies_remaining;
+    public float avg_touch_error_px;
+    public float avg_posterior_gap;
+    public float avg_policy_error_tolerance;
+    public float avg_policy_correction_strength;
 }

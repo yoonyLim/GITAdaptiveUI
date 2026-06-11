@@ -37,6 +37,12 @@ public class RoguelikeGameManager : MonoBehaviour
     public bool startStageOnPlay;
     public int startingStage = 1;
 
+    [Header("Evaluation Demo")]
+    public bool useEvaluationScenarioStages = false;
+    public float evaluationStage1Seconds = 20f;
+    public float evaluationStage2Seconds = 30f;
+    public float evaluationStage3Seconds = 30f;
+
     [Header("UI")]
     public Button skipButton;
     public Button startButton;
@@ -45,9 +51,13 @@ public class RoguelikeGameManager : MonoBehaviour
     public GameObject resultScreenRoot;
     public TextMeshProUGUI stageText;
     public TextMeshProUGUI resultText;
+    public UserEvaluationLogger evaluationLogger;
 
     public int CurrentStage => currentStage;
     public bool IsStageRunning => stageRunning;
+    public bool PrototypeComplete => prototypeComplete;
+    public bool PrototypeFailed => prototypeFailed;
+    public bool PrototypeEnded => prototypeComplete || prototypeFailed;
     public IReadOnlyList<EnemyControllerBase> ActiveEnemies => activeEnemies;
     public Transform PlayerTransform => playerTransform;
     public PlayerController PlayerController => playerController;
@@ -60,10 +70,13 @@ public class RoguelikeGameManager : MonoBehaviour
     private bool isClearingStage;
     private bool calibrationScenarioActive;
     private bool prototypeComplete;
+    private bool prototypeFailed;
     private Coroutine autoAdvanceRoutine;
+    private Coroutine evaluationStageRoutine;
     private GameObject runtimePrefabRoot;
     private StageTelemetry currentStageData;
     private float stageStartTime;
+    private float nextStageUiUpdateTime;
 
     private class StageTelemetry
     {
@@ -75,6 +88,7 @@ public class RoguelikeGameManager : MonoBehaviour
         public float totalTouchDistance;
         public float duration;
         public bool skipped;
+        public bool failed;
 
         public float AverageTouchDistance => touchDistanceSamples <= 0 ? 0f : totalTouchDistance / touchDistanceSamples;
     }
@@ -126,10 +140,25 @@ public class RoguelikeGameManager : MonoBehaviour
         }
     }
 
+    private void Update()
+    {
+        if (!useEvaluationScenarioStages || !stageRunning || calibrationScenarioActive || prototypeComplete || prototypeFailed)
+        {
+            return;
+        }
+
+        if (Time.unscaledTime >= nextStageUiUpdateTime)
+        {
+            nextStageUiUpdateTime = Time.unscaledTime + 0.25f;
+            UpdateStageUI();
+        }
+    }
+
     public void BeginPrototype()
     {
         completedStageData.Clear();
         prototypeComplete = false;
+        prototypeFailed = false;
         stageRunning = false;
         currentStageData = null;
         calibrationScenarioActive = false;
@@ -161,6 +190,7 @@ public class RoguelikeGameManager : MonoBehaviour
         }
 
         prototypeComplete = false;
+        prototypeFailed = false;
         ClearEnemies();
         currentStage = stageNumber;
         ResolveReferences();
@@ -173,19 +203,26 @@ public class RoguelikeGameManager : MonoBehaviour
         Debug.Log($"Starting Stage {currentStage}");
         StartStageTelemetry(currentStage);
 
+        if (useEvaluationScenarioStages && SpawnEvaluationScenarioStage(currentStage))
+        {
+            StartEvaluationStageTimer(currentStage);
+            UpdateStageUI();
+            return;
+        }
+
         switch (currentStage)
         {
             case 1:
-                SpawnEnemies(meleeEnemyPrefab, Random.Range(10, 21), EnemyKind.Melee);
+                SpawnEnemies(meleeEnemyPrefab, Random.Range(5, 11), EnemyKind.Melee);
                 break;
             case 2:
-                SpawnEnemies(meleeEnemyPrefab, 10, EnemyKind.Melee);
-                SpawnEnemies(rangedEnemyPrefab, 5, EnemyKind.Ranged);
+                SpawnEnemies(meleeEnemyPrefab, 5, EnemyKind.Melee);
+                SpawnEnemies(rangedEnemyPrefab, 2, EnemyKind.Ranged);
                 break;
             case 3:
                 SpawnEnemies(bossEnemyPrefab, 1, EnemyKind.Boss);
-                SpawnEnemies(meleeEnemyPrefab, 3, EnemyKind.Melee);
-                SpawnEnemies(rangedEnemyPrefab, 3, EnemyKind.Ranged);
+                SpawnEnemies(meleeEnemyPrefab, 2, EnemyKind.Melee);
+                SpawnEnemies(rangedEnemyPrefab, 2, EnemyKind.Ranged);
                 break;
         }
 
@@ -199,6 +236,27 @@ public class RoguelikeGameManager : MonoBehaviour
         StartStage(currentStage + 1);
     }
 
+    public void NotifyPlayerDied()
+    {
+        if (prototypeComplete || prototypeFailed || calibrationScenarioActive || !stageRunning)
+        {
+            return;
+        }
+
+        prototypeFailed = true;
+        FinishCurrentStage(false, true);
+        ClearEnemies();
+
+        if (playerController != null)
+        {
+            playerController.ClearVirtualMoveInput();
+        }
+
+        UpdateStageUI();
+        ShowResultScreen();
+        Debug.Log("Game Over!");
+    }
+
     public void BeginCalibrationScenario(ADUIContextScenario scenario, bool liveCombat = false)
     {
         ResolveReferences();
@@ -209,6 +267,7 @@ public class RoguelikeGameManager : MonoBehaviour
         calibrationScenarioActive = true;
         stageRunning = false;
         prototypeComplete = false;
+        prototypeFailed = false;
         currentStageData = null;
 
         if (playerController != null)
@@ -228,13 +287,8 @@ public class RoguelikeGameManager : MonoBehaviour
                 SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.75f, 0.15f), false, false, !liveCombat);
                 break;
             case ADUIContextScenario.PreDodgeWindow:
-                if (playerController != null)
-                {
-                    playerController.SetVirtualMoveInput(new Vector2(0.9f, 0.12f));
-                }
-
                 EnemyControllerBase preDodgeEnemy = SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.72f, 0.24f), false, false, true);
-                preDodgeEnemy?.SetCalibrationAttackReadyIn(0.2f);
+                preDodgeEnemy?.SetCalibrationAttackReadyIn(0.45f);
                 break;
             case ADUIContextScenario.RiskyCloseEnemy:
                 EnemyControllerBase riskyEnemy = SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.2f, 0.3f), false, false, true);
@@ -253,7 +307,7 @@ public class RoguelikeGameManager : MonoBehaviour
                     playerController.SetVirtualMoveInput(new Vector2(0.8f, 0.25f));
                 }
 
-                SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.25f, 0.75f), !liveCombat, false, !liveCombat);
+                SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.16f, 0.58f), false, false, true);
                 break;
             case ADUIContextScenario.DodgeThreat:
                 SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.45f, 0.25f), !liveCombat, false, !liveCombat);
@@ -277,7 +331,7 @@ public class RoguelikeGameManager : MonoBehaviour
             case ADUIContextScenario.LowHpThreat:
                 SetCalibrationHp(25);
                 SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.55f, -0.2f), !liveCombat, false, !liveCombat);
-                SpawnCalibrationProjectile(playerPosition + new Vector2(-3.6f, 0.7f), new Vector2(1f, -0.12f), liveCombat ? 1 : 0);
+                SpawnCalibrationProjectile(playerPosition + new Vector2(-2.8f, 0.7f), new Vector2(1f, -0.12f), liveCombat ? 1 : 0, true);
                 break;
             case ADUIContextScenario.CrowdLowHp:
                 SetCalibrationHp(30);
@@ -286,6 +340,42 @@ public class RoguelikeGameManager : MonoBehaviour
             default:
                 break;
         }
+
+        UpdateStageUI();
+        CombatManager.Instance?.ForceRefreshCombatContext();
+    }
+
+    public void BeginModeShowcaseScenario(ADUIInteractionMode mode)
+    {
+        if (mode == ADUIInteractionMode.ActionFirst || mode == ADUIInteractionMode.GuidanceProcedure)
+        {
+            BeginCalibrationScenario(ADUIContextScenario.ImmediateDodgeThreat, false);
+            stageRunning = true;
+            CombatManager.Instance?.ForceRefreshCombatContext();
+            return;
+        }
+
+        ResolveReferences();
+        EnsureRuntimeArena();
+        EnsureRuntimePrefabs();
+        ClearEnemiesImmediate();
+
+        calibrationScenarioActive = true;
+        stageRunning = true;
+        prototypeComplete = false;
+        currentStageData = null;
+
+        if (playerController != null)
+        {
+            playerController.ResetStats(true);
+            playerController.ClearVirtualMoveInput();
+            SetCalibrationHp(Mathf.CeilToInt(playerController.maxHP * 0.34f));
+        }
+
+        Vector2 playerPosition = playerTransform != null ? playerTransform.position : Vector2.zero;
+        SpawnCalibrationEnemy(bossEnemyPrefab, EnemyKind.Boss, playerPosition + new Vector2(4.8f, 2.1f), false, false, true);
+        SpawnCalibrationEnemy(rangedEnemyPrefab, EnemyKind.Ranged, playerPosition + new Vector2(-4.4f, 1.8f), false, false, true);
+        SpawnCalibrationEnemy(rangedEnemyPrefab, EnemyKind.Ranged, playerPosition + new Vector2(4.2f, -2.2f), false, false, true);
 
         UpdateStageUI();
         CombatManager.Instance?.ForceRefreshCombatContext();
@@ -370,6 +460,37 @@ public class RoguelikeGameManager : MonoBehaviour
         }
 
         currentStageData.healingDone += amount;
+    }
+
+    private bool SpawnEvaluationScenarioStage(int stageNumber)
+    {
+        Vector2 playerPosition = playerTransform != null ? playerTransform.position : Vector2.zero;
+
+        switch (stageNumber)
+        {
+            case 1:
+                SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.88f, 0.12f), false, false, true);
+                SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(2.15f, -0.82f), false, false, true);
+                break;
+            case 2:
+                SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.18f, 0.58f), false, false, false);
+                SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(-1.1f, -0.92f), false, false, false);
+                SpawnCalibrationEnemy(rangedEnemyPrefab, EnemyKind.Ranged, playerPosition + new Vector2(4.8f, 1.55f), false, false, true);
+                SpawnCalibrationProjectile(playerPosition + new Vector2(2.9f, -0.55f), new Vector2(-1f, 0.1f), 0, true);
+                break;
+            case 3:
+                SetCalibrationHp(Mathf.CeilToInt((playerController != null ? playerController.maxHP : 100) * 0.28f));
+                SpawnCalibrationEnemy(bossEnemyPrefab, EnemyKind.Boss, playerPosition + new Vector2(3.2f, 0.95f), false, false, false);
+                SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.32f, -0.18f), true, false, true);
+                SpawnCalibrationEnemy(rangedEnemyPrefab, EnemyKind.Ranged, playerPosition + new Vector2(-4.1f, 1.45f), false, false, true);
+                SpawnCalibrationProjectile(playerPosition + new Vector2(-2.8f, 0.72f), new Vector2(1f, -0.12f), 0, true);
+                break;
+            default:
+                return false;
+        }
+
+        Debug.Log($"Evaluation scenario stage {stageNumber} spawned.");
+        return true;
     }
 
     private void SpawnEnemies(GameObject prefab, int count, EnemyKind fallbackKind)
@@ -498,12 +619,7 @@ public class RoguelikeGameManager : MonoBehaviour
             return;
         }
 
-        int targetHp = Mathf.Clamp(hp, 1, playerController.maxHP);
-        int damage = Mathf.Max(0, playerController.CurrentHP - targetHp);
-        if (damage > 0)
-        {
-            playerController.TakeDamage(damage);
-        }
+        playerController.SetScenarioHP(hp);
     }
 
     private void ClearEnemies()
@@ -514,6 +630,12 @@ public class RoguelikeGameManager : MonoBehaviour
         {
             StopCoroutine(autoAdvanceRoutine);
             autoAdvanceRoutine = null;
+        }
+
+        if (evaluationStageRoutine != null)
+        {
+            StopCoroutine(evaluationStageRoutine);
+            evaluationStageRoutine = null;
         }
 
         foreach (EnemyControllerBase enemy in activeEnemies)
@@ -539,6 +661,12 @@ public class RoguelikeGameManager : MonoBehaviour
         {
             StopCoroutine(autoAdvanceRoutine);
             autoAdvanceRoutine = null;
+        }
+
+        if (evaluationStageRoutine != null)
+        {
+            StopCoroutine(evaluationStageRoutine);
+            evaluationStageRoutine = null;
         }
 
         foreach (EnemyControllerBase enemy in activeEnemies)
@@ -783,6 +911,58 @@ public class RoguelikeGameManager : MonoBehaviour
         StartStage(currentStage + 1);
     }
 
+    private void StartEvaluationStageTimer(int stageNumber)
+    {
+        if (evaluationStageRoutine != null)
+        {
+            StopCoroutine(evaluationStageRoutine);
+        }
+
+        evaluationStageRoutine = StartCoroutine(AdvanceEvaluationStageAfterDuration(stageNumber, EvaluationStageDuration(stageNumber)));
+    }
+
+    private IEnumerator AdvanceEvaluationStageAfterDuration(int stageNumber, float duration)
+    {
+        yield return new WaitForSeconds(Mathf.Max(0.1f, duration));
+        evaluationStageRoutine = null;
+
+        if (prototypeComplete ||
+            prototypeFailed ||
+            calibrationScenarioActive ||
+            !stageRunning ||
+            currentStage != stageNumber)
+        {
+            yield break;
+        }
+
+        FinishCurrentStage(false);
+        StartStage(stageNumber + 1);
+    }
+
+    private bool IsEvaluationScenarioStageActive()
+    {
+        return useEvaluationScenarioStages &&
+               stageRunning &&
+               !calibrationScenarioActive &&
+               currentStage >= 1 &&
+               currentStage <= 3;
+    }
+
+    private float EvaluationStageDuration(int stageNumber)
+    {
+        switch (stageNumber)
+        {
+            case 1:
+                return Mathf.Max(1f, evaluationStage1Seconds);
+            case 2:
+                return Mathf.Max(1f, evaluationStage2Seconds);
+            case 3:
+                return Mathf.Max(1f, evaluationStage3Seconds);
+            default:
+                return 0f;
+        }
+    }
+
     private IEnumerator ReleaseClearingFlag()
     {
         yield return null;
@@ -793,6 +973,7 @@ public class RoguelikeGameManager : MonoBehaviour
     {
         FinishCurrentStage(false);
         prototypeComplete = true;
+        prototypeFailed = false;
         ClearEnemies();
         ResolveReferences();
 
@@ -820,9 +1001,16 @@ public class RoguelikeGameManager : MonoBehaviour
         {
             skipButton.interactable = true;
         }
+
+        evaluationLogger?.BeginStage(stageNumber, EvaluationStageLabel(stageNumber));
     }
 
     private void FinishCurrentStage(bool skipped)
+    {
+        FinishCurrentStage(skipped, false);
+    }
+
+    private void FinishCurrentStage(bool skipped, bool failed)
     {
         if (!stageRunning || currentStageData == null)
         {
@@ -831,6 +1019,19 @@ public class RoguelikeGameManager : MonoBehaviour
 
         currentStageData.duration = Mathf.Max(0f, Time.time - stageStartTime);
         currentStageData.skipped = skipped;
+        currentStageData.failed = failed;
+        evaluationLogger?.EndStage(
+            currentStageData.stageNumber,
+            EvaluationStageLabel(currentStageData.stageNumber),
+            skipped,
+            failed,
+            currentStageData.duration,
+            currentStageData.buttonPresses,
+            currentStageData.damageTaken,
+            currentStageData.healingDone,
+            currentStageData.AverageTouchDistance,
+            playerController != null ? playerController.CurrentHP : 0,
+            activeEnemies.Count);
         completedStageData.Add(currentStageData);
         currentStageData = null;
         stageRunning = false;
@@ -846,6 +1047,7 @@ public class RoguelikeGameManager : MonoBehaviour
     private void ShowStartScreen()
     {
         prototypeComplete = false;
+        prototypeFailed = false;
         stageRunning = false;
         currentStageData = null;
         SetScreenActive(resultScreenRoot, false);
@@ -886,7 +1088,11 @@ public class RoguelikeGameManager : MonoBehaviour
     private string BuildResultsText()
     {
         StringBuilder builder = new StringBuilder();
-        builder.AppendLine("Final Results");
+        builder.AppendLine(prototypeFailed ? "Game Over" : "Final Results");
+        if (prototypeFailed)
+        {
+            builder.AppendLine($"Defeated on Stage {currentStage}");
+        }
 
         int totalButtons = 0;
         int totalDamage = 0;
@@ -905,9 +1111,9 @@ public class RoguelikeGameManager : MonoBehaviour
             totalDistance += data.totalTouchDistance;
             totalDistanceSamples += data.touchDistanceSamples;
 
-            string skippedText = data.skipped ? " (skipped)" : string.Empty;
+            string statusText = data.failed ? " (failed)" : data.skipped ? " (skipped)" : string.Empty;
             builder.AppendLine();
-            builder.AppendLine($"Stage {data.stageNumber}{skippedText}");
+            builder.AppendLine($"Stage {data.stageNumber}{statusText}");
             builder.AppendLine($"Button presses: {data.buttonPresses}");
             builder.AppendLine($"Damage taken: {data.damageTaken}");
             builder.AppendLine($"Healed: {data.healingDone}");
@@ -939,12 +1145,37 @@ public class RoguelikeGameManager : MonoBehaviour
             return;
         }
 
+        if (prototypeFailed)
+        {
+            stageText.text = "Game Over";
+            return;
+        }
+
         if (!stageRunning)
         {
             stageText.text = "Ready";
             return;
         }
 
-        stageText.text = $"Stage {currentStage} / 3 - Enemies {activeEnemies.Count}";
+        string evaluationLabel = useEvaluationScenarioStages ? $" - {EvaluationStageLabel(currentStage)}" : string.Empty;
+        string timerLabel = IsEvaluationScenarioStageActive()
+            ? $" - Max {Mathf.CeilToInt(Mathf.Max(0f, EvaluationStageDuration(currentStage) - (Time.time - stageStartTime)))}s"
+            : string.Empty;
+        stageText.text = $"Stage {currentStage} / 3{evaluationLabel}{timerLabel} - Enemies {activeEnemies.Count}";
+    }
+
+    private static string EvaluationStageLabel(int stageNumber)
+    {
+        switch (stageNumber)
+        {
+            case 1:
+                return "Attack Window";
+            case 2:
+                return "Move Pressure";
+            case 3:
+                return "Boss Low HP Threat";
+            default:
+                return "Evaluation";
+        }
     }
 }

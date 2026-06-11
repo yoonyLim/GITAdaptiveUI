@@ -9,13 +9,19 @@ public class AdaptiveUIAdjustmentController : MonoBehaviour
     public CanvasGroup reviewGroup;
     public Image attackButtonImage;
     public Image dodgeButtonImage;
+    public Image healButtonImage;
+    public Image whirlwindButtonImage;
     public RectTransform attackButtonRoot;
     public RectTransform dodgeButtonRoot;
+    public RectTransform healButtonRoot;
+    public RectTransform whirlwindButtonRoot;
 
     [Header("Colors")]
     public Color normalTint = Color.white;
     public Color emphasizedAttackTint = new Color(1f, 0.72f, 0.72f, 1f);
     public Color emphasizedDodgeTint = new Color(0.65f, 0.82f, 1f, 1f);
+    public Color emphasizedUtilityTint = new Color(0.72f, 1f, 0.84f, 1f);
+    public Color emphasizedSkillTint = new Color(1f, 0.82f, 0.48f, 1f);
 
     [Header("Position Bounds")]
     public RectTransform safeArea;
@@ -25,6 +31,12 @@ public class AdaptiveUIAdjustmentController : MonoBehaviour
 
     private Vector2 attackInitialAnchoredPosition;
     private Vector2 dodgeInitialAnchoredPosition;
+    private Vector2 healInitialAnchoredPosition;
+    private Vector2 whirlwindInitialAnchoredPosition;
+    private Color attackInitialColor;
+    private Color dodgeInitialColor;
+    private Color healInitialColor;
+    private Color whirlwindInitialColor;
     private bool capturedInitialPositions;
 
     public void ApplyPolicy(ADUIAdjustmentPolicy policy)
@@ -54,11 +66,19 @@ public class AdaptiveUIAdjustmentController : MonoBehaviour
 
         if (attackButtonImage)
         {
-            attackButtonImage.color = Color.Lerp(normalTint, emphasizedAttackTint, policy.emphasis);
+            attackButtonImage.color = Color.Lerp(attackInitialColor, emphasizedAttackTint, policy.emphasis * 0.55f);
         }
         if (dodgeButtonImage)
         {
-            dodgeButtonImage.color = Color.Lerp(normalTint, emphasizedDodgeTint, policy.emphasis);
+            dodgeButtonImage.color = Color.Lerp(dodgeInitialColor, emphasizedDodgeTint, policy.emphasis * 0.55f);
+        }
+        if (healButtonImage)
+        {
+            healButtonImage.color = Color.Lerp(healInitialColor, emphasizedUtilityTint, policy.emphasis * 0.42f);
+        }
+        if (whirlwindButtonImage)
+        {
+            whirlwindButtonImage.color = Color.Lerp(whirlwindInitialColor, emphasizedSkillTint, policy.emphasis * 0.42f);
         }
 
         ApplyPositionConstraint(policy);
@@ -69,6 +89,12 @@ public class AdaptiveUIAdjustmentController : MonoBehaviour
         if (capturedInitialPositions) return;
         if (attackButtonRoot) attackInitialAnchoredPosition = attackButtonRoot.anchoredPosition;
         if (dodgeButtonRoot) dodgeInitialAnchoredPosition = dodgeButtonRoot.anchoredPosition;
+        if (healButtonRoot) healInitialAnchoredPosition = healButtonRoot.anchoredPosition;
+        if (whirlwindButtonRoot) whirlwindInitialAnchoredPosition = whirlwindButtonRoot.anchoredPosition;
+        attackInitialColor = attackButtonImage ? attackButtonImage.color : normalTint;
+        dodgeInitialColor = dodgeButtonImage ? dodgeButtonImage.color : normalTint;
+        healInitialColor = healButtonImage ? healButtonImage.color : normalTint;
+        whirlwindInitialColor = whirlwindButtonImage ? whirlwindButtonImage.color : normalTint;
         capturedInitialPositions = true;
     }
 
@@ -82,6 +108,14 @@ public class AdaptiveUIAdjustmentController : MonoBehaviour
         if (dodgeButtonRoot)
         {
             dodgeButtonRoot.anchoredPosition = ClampToSafeArea(dodgeInitialAnchoredPosition + new Vector2(shift, 0f));
+        }
+        if (healButtonRoot)
+        {
+            healButtonRoot.anchoredPosition = ClampToSafeArea(healInitialAnchoredPosition + new Vector2(-shift * 0.35f, -shift * 0.25f));
+        }
+        if (whirlwindButtonRoot)
+        {
+            whirlwindButtonRoot.anchoredPosition = ClampToSafeArea(whirlwindInitialAnchoredPosition + new Vector2(shift * 0.35f, -shift * 0.25f));
         }
     }
 
