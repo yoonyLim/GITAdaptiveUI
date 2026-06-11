@@ -91,6 +91,6 @@ public class TopDownCameraFollow : MonoBehaviour
 
     private float ClampAxis(float value, float min, float max, float fallback)
     {
-        return min <= max ? Mathf.Clamp(value, min, max) : fallback;
+        return min <= max ? Mathf.Clamp(value, min, max) : Mathf.Clamp(value, max, min);
     }
 }

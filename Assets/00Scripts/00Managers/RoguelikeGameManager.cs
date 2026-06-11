@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using TMPro;
 using UnityEngine;
@@ -8,8 +9,8 @@ using UnityEngine.UI;
 public class RoguelikeGameManager : MonoBehaviour
 {
     public static RoguelikeGameManager Instance;
-    public const float ArenaHalfWidth = 10f;
-    public const float ArenaHalfHeight = 10f;
+    public const float ArenaHalfWidth = 8.6f;
+    public const float ArenaHalfHeight = 6.2f;
     public const float PlayerArenaPadding = 0.72f;
     public const float EnemyArenaPadding = 0.52f;
 
@@ -32,14 +33,15 @@ public class RoguelikeGameManager : MonoBehaviour
     public Transform playerTransform;
     public PlayerController playerController;
     public Transform enemyRoot;
-    public float spawnRadius = 7.5f;
-    public float spawnRadiusJitter = 1.2f;
+    public float spawnRadius = 5.2f;
+    public float spawnRadiusJitter = 0.75f;
     public bool startStageOnPlay;
     public int startingStage = 1;
 
     [Header("Evaluation Demo")]
     public bool useEvaluationScenarioStages = false;
-    public float evaluationStage1Seconds = 20f;
+    public float maxStageSeconds = 30f;
+    public float evaluationStage1Seconds = 30f;
     public float evaluationStage2Seconds = 30f;
     public float evaluationStage3Seconds = 30f;
 
@@ -47,11 +49,13 @@ public class RoguelikeGameManager : MonoBehaviour
     public Button skipButton;
     public Button startButton;
     public Button restartButton;
+    public Button copyLogsButton;
     public GameObject startScreenRoot;
     public GameObject resultScreenRoot;
     public TextMeshProUGUI stageText;
     public TextMeshProUGUI resultText;
     public UserEvaluationLogger evaluationLogger;
+    public ExperimentSessionManager sessionManager;
 
     public int CurrentStage => currentStage;
     public bool IsStageRunning => stageRunning;
@@ -72,11 +76,12 @@ public class RoguelikeGameManager : MonoBehaviour
     private bool prototypeComplete;
     private bool prototypeFailed;
     private Coroutine autoAdvanceRoutine;
-    private Coroutine evaluationStageRoutine;
+    private Coroutine stageTimerRoutine;
     private GameObject runtimePrefabRoot;
     private StageTelemetry currentStageData;
     private float stageStartTime;
     private float nextStageUiUpdateTime;
+    private string latestFinalLogBundlePath = "";
 
     private class StageTelemetry
     {
@@ -130,6 +135,12 @@ public class RoguelikeGameManager : MonoBehaviour
             restartButton.onClick.AddListener(BeginPrototype);
         }
 
+        if (copyLogsButton != null)
+        {
+            copyLogsButton.onClick.RemoveListener(CopyFinalLogsToClipboard);
+            copyLogsButton.onClick.AddListener(CopyFinalLogsToClipboard);
+        }
+
         if (startStageOnPlay)
         {
             BeginPrototype();
@@ -142,7 +153,7 @@ public class RoguelikeGameManager : MonoBehaviour
 
     private void Update()
     {
-        if (!useEvaluationScenarioStages || !stageRunning || calibrationScenarioActive || prototypeComplete || prototypeFailed)
+        if (!stageRunning || calibrationScenarioActive || prototypeComplete || prototypeFailed)
         {
             return;
         }
@@ -205,7 +216,7 @@ public class RoguelikeGameManager : MonoBehaviour
 
         if (useEvaluationScenarioStages && SpawnEvaluationScenarioStage(currentStage))
         {
-            StartEvaluationStageTimer(currentStage);
+            StartStageTimer(currentStage);
             UpdateStageUI();
             return;
         }
@@ -226,6 +237,7 @@ public class RoguelikeGameManager : MonoBehaviour
                 break;
         }
 
+        StartStageTimer(currentStage);
         UpdateStageUI();
     }
 
@@ -343,6 +355,7 @@ public class RoguelikeGameManager : MonoBehaviour
 
         UpdateStageUI();
         CombatManager.Instance?.ForceRefreshCombatContext();
+        LogShowcaseEvent("scenario_begin", scenario, "", liveCombat);
     }
 
     public void BeginModeShowcaseScenario(ADUIInteractionMode mode)
@@ -352,6 +365,7 @@ public class RoguelikeGameManager : MonoBehaviour
             BeginCalibrationScenario(ADUIContextScenario.ImmediateDodgeThreat, false);
             stageRunning = true;
             CombatManager.Instance?.ForceRefreshCombatContext();
+            LogShowcaseEvent("mode_showcase_begin", ADUIContextScenario.ImmediateDodgeThreat, mode.ToString(), false);
             return;
         }
 
@@ -379,10 +393,12 @@ public class RoguelikeGameManager : MonoBehaviour
 
         UpdateStageUI();
         CombatManager.Instance?.ForceRefreshCombatContext();
+        LogShowcaseEvent("mode_showcase_begin", ADUIContextScenario.General, mode.ToString(), false);
     }
 
     public void ClearCalibrationScenario()
     {
+        LogShowcaseEvent("scenario_clear", ADUIContextScenario.General, "", false);
         if (playerController != null)
         {
             playerController.ClearVirtualMoveInput();
@@ -394,6 +410,33 @@ public class RoguelikeGameManager : MonoBehaviour
         currentStageData = null;
         UpdateStageUI();
         CombatManager.Instance?.ForceRefreshCombatContext();
+    }
+
+    private void LogShowcaseEvent(string eventType, ADUIContextScenario scenario, string mode, bool liveCombat)
+    {
+        ResolveReferences();
+        if (sessionManager == null || sessionManager.exporter == null || !sessionManager.HasActiveSession)
+        {
+            return;
+        }
+
+        ConditionManager conditionManager = FindAnyObjectByType<ConditionManager>();
+        var record = new ADUIShowcaseEventRecord
+        {
+            session_id = sessionManager.sessionId,
+            participant_id = sessionManager.ParticipantId(),
+            condition = conditionManager != null ? conditionManager.currentCondition : "",
+            timestamp_ms = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            event_type = eventType ?? "",
+            scenario = UserContextPriorModel.ScenarioLabel(scenario),
+            mode = mode ?? "",
+            live_combat = liveCombat,
+            active_enemies = activeEnemies.Count,
+            player_hp = playerController != null ? playerController.CurrentHP : 0,
+            stage_running = stageRunning
+        };
+
+        sessionManager.exporter.AppendJsonl(sessionManager.EnsureSession(), "showcase_events.jsonl", record);
     }
 
     public void NotifyEnemyDefeated(EnemyControllerBase enemy)
@@ -542,7 +585,8 @@ public class RoguelikeGameManager : MonoBehaviour
             enemyRoot = new GameObject("Enemies").transform;
         }
 
-        GameObject enemyObject = Instantiate(prefab, position, Quaternion.identity, enemyRoot);
+        Vector2 clampedPosition = ClampToArena(position, EnemyArenaPadding);
+        GameObject enemyObject = Instantiate(prefab, clampedPosition, Quaternion.identity, enemyRoot);
         enemyObject.name = $"Calibration {fallbackKind} Scenario Enemy";
         enemyObject.SetActive(true);
 
@@ -632,10 +676,10 @@ public class RoguelikeGameManager : MonoBehaviour
             autoAdvanceRoutine = null;
         }
 
-        if (evaluationStageRoutine != null)
+        if (stageTimerRoutine != null)
         {
-            StopCoroutine(evaluationStageRoutine);
-            evaluationStageRoutine = null;
+            StopCoroutine(stageTimerRoutine);
+            stageTimerRoutine = null;
         }
 
         foreach (EnemyControllerBase enemy in activeEnemies)
@@ -663,10 +707,10 @@ public class RoguelikeGameManager : MonoBehaviour
             autoAdvanceRoutine = null;
         }
 
-        if (evaluationStageRoutine != null)
+        if (stageTimerRoutine != null)
         {
-            StopCoroutine(evaluationStageRoutine);
-            evaluationStageRoutine = null;
+            StopCoroutine(stageTimerRoutine);
+            stageTimerRoutine = null;
         }
 
         foreach (EnemyControllerBase enemy in activeEnemies)
@@ -689,8 +733,9 @@ public class RoguelikeGameManager : MonoBehaviour
         Vector2 playerPosition = playerTransform != null ? playerTransform.position : Vector2.zero;
         float angle = (Mathf.PI * 2f * index / Mathf.Max(1, count)) + Random.Range(-0.35f, 0.35f);
         float radius = spawnRadius + Random.Range(-spawnRadiusJitter, spawnRadiusJitter);
-        Vector2 offset = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * Mathf.Max(2.5f, radius);
-        return new Vector3(playerPosition.x + offset.x, playerPosition.y + offset.y, 0f);
+        Vector2 offset = new Vector2(Mathf.Cos(angle), Mathf.Sin(angle)) * Mathf.Max(2.3f, radius);
+        Vector2 clamped = ClampToArena(playerPosition + offset, EnemyArenaPadding);
+        return new Vector3(clamped.x, clamped.y, 0f);
     }
 
     private EnemyControllerBase AddControllerForKind(GameObject enemyObject, EnemyKind kind)
@@ -722,6 +767,11 @@ public class RoguelikeGameManager : MonoBehaviour
         {
             GameObject existingRoot = GameObject.Find("Enemies");
             enemyRoot = existingRoot != null ? existingRoot.transform : new GameObject("Enemies").transform;
+        }
+
+        if (sessionManager == null)
+        {
+            sessionManager = FindAnyObjectByType<ExperimentSessionManager>();
         }
     }
 
@@ -880,7 +930,7 @@ public class RoguelikeGameManager : MonoBehaviour
             floor,
             PrototypeVisualFactory.SquareSprite,
             new Color(0.1f, 0.13f, 0.12f, 1f),
-            new Vector2(20f, 20f),
+            new Vector2(ArenaHalfWidth * 2f, ArenaHalfHeight * 2f),
             -10);
 
         CreateArenaLine(arena.transform, "North Border", new Vector2(0f, ArenaHalfHeight), new Vector2(ArenaHalfWidth * 2f, 0.14f));
@@ -911,20 +961,27 @@ public class RoguelikeGameManager : MonoBehaviour
         StartStage(currentStage + 1);
     }
 
-    private void StartEvaluationStageTimer(int stageNumber)
+    private void StartStageTimer(int stageNumber)
     {
-        if (evaluationStageRoutine != null)
+        if (stageTimerRoutine != null)
         {
-            StopCoroutine(evaluationStageRoutine);
+            StopCoroutine(stageTimerRoutine);
         }
 
-        evaluationStageRoutine = StartCoroutine(AdvanceEvaluationStageAfterDuration(stageNumber, EvaluationStageDuration(stageNumber)));
+        float duration = StageDuration(stageNumber);
+        if (duration <= 0f)
+        {
+            stageTimerRoutine = null;
+            return;
+        }
+
+        stageTimerRoutine = StartCoroutine(AdvanceStageAfterDuration(stageNumber, duration));
     }
 
-    private IEnumerator AdvanceEvaluationStageAfterDuration(int stageNumber, float duration)
+    private IEnumerator AdvanceStageAfterDuration(int stageNumber, float duration)
     {
         yield return new WaitForSeconds(Mathf.Max(0.1f, duration));
-        evaluationStageRoutine = null;
+        stageTimerRoutine = null;
 
         if (prototypeComplete ||
             prototypeFailed ||
@@ -939,13 +996,23 @@ public class RoguelikeGameManager : MonoBehaviour
         StartStage(stageNumber + 1);
     }
 
-    private bool IsEvaluationScenarioStageActive()
+    private bool IsStageTimerActive()
     {
-        return useEvaluationScenarioStages &&
-               stageRunning &&
+        return stageRunning &&
                !calibrationScenarioActive &&
                currentStage >= 1 &&
-               currentStage <= 3;
+               currentStage <= 3 &&
+               StageDuration(currentStage) > 0f;
+    }
+
+    private float StageDuration(int stageNumber)
+    {
+        if (maxStageSeconds > 0f)
+        {
+            return Mathf.Max(1f, maxStageSeconds);
+        }
+
+        return useEvaluationScenarioStages ? EvaluationStageDuration(stageNumber) : 0f;
     }
 
     private float EvaluationStageDuration(int stageNumber)
@@ -986,6 +1053,18 @@ public class RoguelikeGameManager : MonoBehaviour
         UpdateStageUI();
         ShowResultScreen();
         Debug.Log("All stages complete!");
+    }
+
+    private void WriteFinalSessionLogs()
+    {
+        ResolveReferences();
+        if (sessionManager == null)
+        {
+            return;
+        }
+
+        string state = prototypeComplete ? "complete" : prototypeFailed ? "failed" : "ended";
+        latestFinalLogBundlePath = sessionManager.WriteFinalLogBundle(state, currentStage);
     }
 
     private void StartStageTelemetry(int stageNumber)
@@ -1063,6 +1142,7 @@ public class RoguelikeGameManager : MonoBehaviour
 
     private void ShowResultScreen()
     {
+        WriteFinalSessionLogs();
         SetScreenActive(startScreenRoot, false);
         SetScreenActive(resultScreenRoot, true);
 
@@ -1075,6 +1155,8 @@ public class RoguelikeGameManager : MonoBehaviour
         {
             resultText.text = BuildResultsText();
         }
+
+        SetCopyLogsButtonState();
     }
 
     private void SetScreenActive(GameObject screenRoot, bool active)
@@ -1129,7 +1211,167 @@ public class RoguelikeGameManager : MonoBehaviour
         builder.AppendLine($"Healed: {totalHealing}");
         builder.AppendLine($"Time: {totalTime:F1}s");
         builder.AppendLine($"Avg touch error: {totalAverageDistance:F1}px");
+        if (!string.IsNullOrEmpty(latestFinalLogBundlePath))
+        {
+            builder.AppendLine();
+            builder.AppendLine("Logs");
+            builder.AppendLine(latestFinalLogBundlePath);
+            builder.Append(BuildFinalLogPreviewText());
+        }
+
         return builder.ToString();
+    }
+
+    private string BuildFinalLogPreviewText()
+    {
+        if (string.IsNullOrEmpty(latestFinalLogBundlePath) || !File.Exists(latestFinalLogBundlePath))
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder();
+        string directory = Path.GetDirectoryName(latestFinalLogBundlePath);
+        if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+        {
+            return string.Empty;
+        }
+
+        builder.AppendLine();
+        builder.AppendLine("Time-series logs");
+        string[] jsonlFiles = Directory.GetFiles(directory, "*.jsonl");
+        System.Array.Sort(jsonlFiles, System.StringComparer.OrdinalIgnoreCase);
+        if (jsonlFiles.Length == 0)
+        {
+            builder.AppendLine("No JSONL records written.");
+        }
+        else
+        {
+            for (int i = 0; i < jsonlFiles.Length; i++)
+            {
+                AppendLogFileCount(builder, jsonlFiles[i]);
+            }
+        }
+
+        builder.AppendLine("Copy button exports full final_session_logs.json.");
+
+        AppendLastLogLine(builder, directory, "evaluation_touch_events.jsonl", "Last touch");
+        AppendLastLogLine(builder, directory, "mode_policy_events.jsonl", "Last mode");
+        return builder.ToString();
+    }
+
+    private static void AppendLogFileCount(StringBuilder builder, string path)
+    {
+        int count = CountNonEmptyLines(path);
+        builder.AppendLine($"{Path.GetFileName(path)}: {count} records");
+    }
+
+    private static int CountNonEmptyLines(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return 0;
+        }
+
+        int count = 0;
+        using (var reader = new StreamReader(path, Encoding.UTF8))
+        {
+            while (!reader.EndOfStream)
+            {
+                if (!string.IsNullOrWhiteSpace(reader.ReadLine()))
+                {
+                    count++;
+                }
+            }
+        }
+
+        return count;
+    }
+
+    private static void AppendLastLogLine(StringBuilder builder, string directory, string fileName, string label)
+    {
+        string path = Path.Combine(directory, fileName);
+        string line = ReadLastNonEmptyLine(path);
+        if (string.IsNullOrEmpty(line))
+        {
+            return;
+        }
+
+        const int maxPreviewChars = 420;
+        if (line.Length > maxPreviewChars)
+        {
+            line = line.Substring(0, maxPreviewChars) + "...";
+        }
+
+        builder.AppendLine();
+        builder.AppendLine(label);
+        builder.AppendLine(line);
+    }
+
+    private static string ReadLastNonEmptyLine(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return string.Empty;
+        }
+
+        string last = string.Empty;
+        using (var reader = new StreamReader(path, Encoding.UTF8))
+        {
+            while (!reader.EndOfStream)
+            {
+                string line = reader.ReadLine();
+                if (!string.IsNullOrWhiteSpace(line))
+                {
+                    last = line.Trim();
+                }
+            }
+        }
+
+        return last;
+    }
+
+    public void CopyFinalLogsToClipboard()
+    {
+        if (string.IsNullOrEmpty(latestFinalLogBundlePath) || !File.Exists(latestFinalLogBundlePath))
+        {
+            WriteFinalSessionLogs();
+        }
+
+        if (string.IsNullOrEmpty(latestFinalLogBundlePath) || !File.Exists(latestFinalLogBundlePath))
+        {
+            Debug.LogWarning("[ADUI] No final session log bundle is available to copy.");
+            return;
+        }
+
+        GUIUtility.systemCopyBuffer = File.ReadAllText(latestFinalLogBundlePath, Encoding.UTF8);
+        Debug.Log($"[ADUI] Copied final session logs to clipboard: {latestFinalLogBundlePath}");
+        SetCopyLogsButtonLabel("Logs Copied");
+    }
+
+    private void SetCopyLogsButtonState()
+    {
+        if (copyLogsButton == null)
+        {
+            return;
+        }
+
+        bool hasLogs = !string.IsNullOrEmpty(latestFinalLogBundlePath) && File.Exists(latestFinalLogBundlePath);
+        copyLogsButton.interactable = hasLogs;
+        SetCopyLogsButtonLabel(hasLogs ? "Copy Time-Series JSON" : "No Logs");
+    }
+
+    private void SetCopyLogsButtonLabel(string label)
+    {
+        if (copyLogsButton == null)
+        {
+            return;
+        }
+
+        TextMeshProUGUI labelText = copyLogsButton.GetComponentInChildren<TextMeshProUGUI>();
+        if (labelText != null)
+        {
+            labelText.text = label;
+        }
     }
 
     private void UpdateStageUI()
@@ -1158,8 +1400,8 @@ public class RoguelikeGameManager : MonoBehaviour
         }
 
         string evaluationLabel = useEvaluationScenarioStages ? $" - {EvaluationStageLabel(currentStage)}" : string.Empty;
-        string timerLabel = IsEvaluationScenarioStageActive()
-            ? $" - Max {Mathf.CeilToInt(Mathf.Max(0f, EvaluationStageDuration(currentStage) - (Time.time - stageStartTime)))}s"
+        string timerLabel = IsStageTimerActive()
+            ? $" - Max {Mathf.CeilToInt(Mathf.Max(0f, StageDuration(currentStage) - (Time.time - stageStartTime)))}s"
             : string.Empty;
         stageText.text = $"Stage {currentStage} / 3{evaluationLabel}{timerLabel} - Enemies {activeEnemies.Count}";
     }

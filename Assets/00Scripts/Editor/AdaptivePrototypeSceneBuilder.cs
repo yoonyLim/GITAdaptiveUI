@@ -137,7 +137,7 @@ public static class AdaptivePrototypeSceneBuilder
 
         Camera camera = cameraObject.AddComponent<Camera>();
         camera.orthographic = true;
-        camera.orthographicSize = 5.4f;
+        camera.orthographicSize = 4.35f;
         camera.backgroundColor = new Color(0.06f, 0.08f, 0.08f, 1f);
         camera.clearFlags = CameraClearFlags.SolidColor;
 

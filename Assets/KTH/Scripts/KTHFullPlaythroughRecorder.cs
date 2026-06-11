@@ -33,6 +33,7 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
     private RoguelikeGameManager gameManager;
     private PlayerController playerController;
     private AdaptiveGameHudController gameHud;
+    private ExperimentSessionManager sessionManager;
     private MethodInfo processInputBegan;
     private MethodInfo processInputEnded;
     private CanvasGroup overlayGroup;
@@ -50,6 +51,7 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
     private string lastDecisionLine = "";
     private Vector2 currentTouch;
     private bool markerVisible;
+    private string copiedSessionLogBundlePath = "";
 
     private void OnEnable()
     {
@@ -193,6 +195,7 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
 
     private void WriteDoneFile()
     {
+        CopyFinalLogsToOutputDir();
         File.WriteAllText(
             Path.Combine(outputDir, "done.txt"),
             $"frames={frameIndex}{Environment.NewLine}" +
@@ -201,8 +204,29 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
             $"failed={IsPrototypeFailed()}{Environment.NewLine}" +
             $"stage={(gameManager != null ? gameManager.CurrentStage : -1)}{Environment.NewLine}" +
             $"hp={(playerController != null ? playerController.CurrentHP : -1)}{Environment.NewLine}" +
+            $"sessionLogBundle={copiedSessionLogBundlePath}{Environment.NewLine}" +
             $"maxAbsPlayerX={maxAbsPlayerX:F2}{Environment.NewLine}" +
             $"maxAbsPlayerY={maxAbsPlayerY:F2}{Environment.NewLine}");
+    }
+
+    private void CopyFinalLogsToOutputDir()
+    {
+        ResolveReferences();
+        if (sessionManager == null)
+        {
+            return;
+        }
+
+        string state = IsPrototypeComplete() ? "complete" : IsPrototypeFailed() ? "failed" : "timeout_or_stopped";
+        string sourcePath = sessionManager.WriteFinalLogBundle(state, gameManager != null ? gameManager.CurrentStage : -1);
+        if (string.IsNullOrEmpty(sourcePath) || !File.Exists(sourcePath))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(outputDir);
+        copiedSessionLogBundlePath = Path.Combine(outputDir, "final_session_logs.json");
+        File.Copy(sourcePath, copiedSessionLogBundlePath, true);
     }
 
     private void QuitApplication()
@@ -977,6 +1001,7 @@ public class KTHFullPlaythroughRecorder : MonoBehaviour
         combatManager = CombatManager.Instance != null ? CombatManager.Instance : FindAnyObjectByType<CombatManager>();
         gameManager = RoguelikeGameManager.Instance != null ? RoguelikeGameManager.Instance : FindAnyObjectByType<RoguelikeGameManager>();
         gameHud = FindAnyObjectByType<AdaptiveGameHudController>();
+        sessionManager = FindAnyObjectByType<ExperimentSessionManager>();
         playerController = gameManager != null && gameManager.PlayerController != null
             ? gameManager.PlayerController
             : FindAnyObjectByType<PlayerController>();

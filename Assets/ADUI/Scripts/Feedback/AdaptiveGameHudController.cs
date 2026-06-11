@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -13,6 +14,9 @@ public class AdaptiveGameHudController : MonoBehaviour
     public TextMeshProUGUI scenarioTagText;
     public TextMeshProUGUI dangerIndicatorText;
     public TextMeshProUGUI correctionToastText;
+    public CanvasGroup bossHudGroup;
+    public Image bossHpFillImage;
+    public TextMeshProUGUI bossHpText;
 
     [Header("Research Overlay")]
     public bool showResearchOverlay;
@@ -33,6 +37,7 @@ public class AdaptiveGameHudController : MonoBehaviour
         bool correctionVisible)
     {
         ApplyHp(player);
+        ApplyBossHp();
         ApplyModeAndPolicy(demand, policy);
         ApplyScenario(demand, scenario);
         ApplyCorrectionToast(correctionMessage, correctionColor, correctionVisible);
@@ -47,7 +52,7 @@ public class AdaptiveGameHudController : MonoBehaviour
 
         if (hpFillImage != null)
         {
-            hpFillImage.fillAmount = hpRatio;
+            hpFillImage.fillAmount = Mathf.Max(hpRatio, 0.035f);
             hpFillImage.color = Color.Lerp(
                 new Color(0.95f, 0.22f, 0.18f, 0.95f),
                 new Color(0.24f, 0.82f, 0.42f, 0.95f),
@@ -58,6 +63,81 @@ public class AdaptiveGameHudController : MonoBehaviour
         {
             hpText.text = $"HP {currentHp}/{maxHp}";
         }
+    }
+
+    private void ApplyBossHp()
+    {
+        EnemyControllerBase boss = FindActiveBoss();
+        bool showBoss = boss != null && boss.IsAlive;
+
+        if (bossHudGroup != null)
+        {
+            bossHudGroup.alpha = showBoss ? 1f : 0f;
+            bossHudGroup.interactable = false;
+            bossHudGroup.blocksRaycasts = false;
+        }
+
+        if (!showBoss)
+        {
+            if (bossHpText != null)
+            {
+                bossHpText.text = string.Empty;
+            }
+
+            if (bossHpFillImage != null)
+            {
+                bossHpFillImage.fillAmount = 0f;
+            }
+
+            return;
+        }
+
+        int currentHp = Mathf.Max(0, boss.CurrentHP);
+        int maxHp = Mathf.Max(1, boss.maxHP);
+        float hpRatio = Mathf.Clamp01(currentHp / (float)maxHp);
+
+        if (bossHpFillImage != null)
+        {
+            bossHpFillImage.fillAmount = hpRatio;
+            bossHpFillImage.color = Color.Lerp(
+                new Color(0.95f, 0.18f, 0.16f, 0.95f),
+                new Color(0.7f, 0.28f, 0.92f, 0.95f),
+                hpRatio);
+        }
+
+        if (bossHpText != null)
+        {
+            bossHpText.text = $"BOSS {currentHp}/{maxHp}";
+        }
+    }
+
+    private EnemyControllerBase FindActiveBoss()
+    {
+        RoguelikeGameManager gameManager = RoguelikeGameManager.Instance;
+        if (gameManager != null)
+        {
+            IReadOnlyList<EnemyControllerBase> enemies = gameManager.ActiveEnemies;
+            for (int i = 0; i < enemies.Count; i++)
+            {
+                EnemyControllerBase enemy = enemies[i];
+                if (enemy != null && enemy.enemyKind == EnemyKind.Boss && enemy.IsAlive)
+                {
+                    return enemy;
+                }
+            }
+        }
+
+        EnemyControllerBase[] sceneEnemies = Object.FindObjectsByType<EnemyControllerBase>(FindObjectsSortMode.None);
+        for (int i = 0; i < sceneEnemies.Length; i++)
+        {
+            EnemyControllerBase enemy = sceneEnemies[i];
+            if (enemy != null && enemy.enemyKind == EnemyKind.Boss && enemy.IsAlive)
+            {
+                return enemy;
+            }
+        }
+
+        return null;
     }
 
     private void ApplyModeAndPolicy(ADUIInteractionDemand demand, ADUIAdjustmentPolicy policy)

@@ -47,6 +47,64 @@ public class ADUISessionMeta
 }
 
 [Serializable]
+public class ADUISessionFinalSummary
+{
+    public string session_id = "";
+    public string participant_id = "";
+    public string condition = "";
+    public string completion_state = "";
+    public int current_stage;
+    public bool prototype_complete;
+    public bool prototype_failed;
+    public string timestamp_end = "";
+    public string final_bundle_file = "";
+}
+
+[Serializable]
+public class ADUICalibrationEventRecord
+{
+    public string session_id = "";
+    public string participant_id = "";
+    public string condition = "";
+    public long timestamp_ms;
+    public string event_type = "";
+    public int trial_index;
+    public int total_trials;
+    public string trial_type = "";
+    public string target_action = "";
+    public string scenario = "";
+    public string instruction = "";
+    public bool accepted;
+    public bool use_for_model;
+    public bool affects_center_bias;
+    public bool is_validation;
+    public bool is_combat_scenario;
+    public float touch_x;
+    public float touch_y;
+    public string resolved_action = "";
+    public bool direct_hit;
+    public float confidence;
+    public string model_effect = "";
+    public string message = "";
+}
+
+[Serializable]
+public class ADUIShowcaseEventRecord
+{
+    public string session_id = "";
+    public string participant_id = "";
+    public string condition = "";
+    public long timestamp_ms;
+    public string event_type = "";
+    public string scenario = "";
+    public string mode = "";
+    public bool live_combat;
+    public int active_enemies;
+    public int player_hp;
+    public bool stage_running;
+}
+
+[Serializable]
 public class ADUITrialRecord
 {
     public string session_id = "";

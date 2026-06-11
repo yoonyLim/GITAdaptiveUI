@@ -15,6 +15,7 @@ public class FourButtonCalibrationFlow : MonoBehaviour
     public RoguelikeGameManager gameManager;
     public ParticipantConfig participantConfig;
     public ConditionManager conditionManager;
+    public ExperimentSessionManager sessionManager;
     public GameObject startScreenRoot;
     public Button startButton;
     public Button rawStartButton;
@@ -68,6 +69,7 @@ public class FourButtonCalibrationFlow : MonoBehaviour
     private float ignoreInputUntil;
     private Coroutine startGameRoutine;
     private Coroutine combatAdvanceRoutine;
+    private Coroutine hideFeedbackRoutine;
     private bool scenarioSceneActive;
     private bool waitingForCombatSettle;
     private bool currentTrialReadyPromptShown;
@@ -157,6 +159,8 @@ public class FourButtonCalibrationFlow : MonoBehaviour
             return;
         }
 
+        LogCalibrationEvent("calibration_begin", default, true, default, "", false, 0f, "", $"total_trials={trials.Count}");
+
         startScreenRoot?.SetActive(false);
         gameManager?.ClearCalibrationScenario();
         touchManager.ResetFourButtonCalibration();
@@ -194,10 +198,13 @@ public class FourButtonCalibrationFlow : MonoBehaviour
 
         if (!touchManager.IsTouchNearAction(trial.targetAction, screenPosition, trial.maxAcceptDistance))
         {
+            LogCalibrationEvent("touch_rejected", trial, false, screenPosition, "", false, 0f, "", "not_near_target");
             SetFeedback($"{trial.targetAction} 버튼 근처를 누르세요.", Color.yellow);
             return false;
         }
 
+        string modelEffect = "";
+        string eventMessage = "";
         if (trial.useForModel)
         {
             touchManager.AddFourButtonCalibrationSample(
@@ -205,8 +212,9 @@ public class FourButtonCalibrationFlow : MonoBehaviour
                 screenPosition,
                 trial.affectsCenterBias,
                 trial.sampleWeight);
-            string modelEffect = trial.affectsCenterBias ? "mean+spread" : "spread-only";
+            modelEffect = trial.affectsCenterBias ? "mean+spread" : "spread-only";
             string modelState = touchManager.GetFourButtonCalibrationModelState(trial.targetAction, modelEffect);
+            eventMessage = modelState;
             SetFeedback(
                 $"{trial.targetAction} {trial.trialType} 샘플 {touchManager.GetFourButtonCalibrationSampleCount(trial.targetAction)}개 저장.\n{modelState}",
                 Color.cyan);
@@ -214,13 +222,16 @@ public class FourButtonCalibrationFlow : MonoBehaviour
         else if (trial.isValidation)
         {
             string validationResult = touchManager.RecordFourButtonCalibrationValidation(trial.targetAction, screenPosition, trial.trialType);
+            eventMessage = validationResult;
             SetFeedback(validationResult, validationResult.Contains("MISS") ? Color.yellow : Color.cyan);
         }
         else
         {
+            eventMessage = "warmup";
             SetFeedback($"{trial.targetAction} 워밍업 입력을 받았습니다.", Color.cyan);
         }
 
+        LogCalibrationEvent("touch_accepted", trial, true, screenPosition, trial.targetAction, true, 1f, modelEffect, eventMessage);
         ignoreInputUntil = Time.unscaledTime + 0.08f;
         BeginNextTrial();
         return true;
@@ -269,7 +280,9 @@ public class FourButtonCalibrationFlow : MonoBehaviour
             UpdateCalibrationStageLabel();
         }
 
-        SetFeedback(BuildInstructionPrompt(trial, blockIntro), Color.white);
+        string prompt = BuildInstructionPrompt(trial, blockIntro);
+        SetFeedback(prompt, Color.white);
+        LogCalibrationEvent("trial_start", trial, false, default, "", false, 0f, "", prompt);
     }
 
     private void UpdateCalibrationStageLabel()
@@ -303,6 +316,7 @@ public class FourButtonCalibrationFlow : MonoBehaviour
             "캘리브레이션 완료.\n터치 프로필과 상황별 prior가 준비되었습니다. 곧 게임을 시작합니다.",
             Color.green);
         Debug.Log($"[ADUI] Four-button calibration complete. {touchManager.FourButtonCalibrationSummary}{contextSummary}");
+        LogCalibrationEvent("calibration_complete", default, true, default, "", false, 0f, "", $"{touchManager.FourButtonCalibrationSummary}{contextSummary}");
 
         if (autoStartGameAfterCalibration && startGameRoutine == null)
         {
@@ -345,6 +359,7 @@ public class FourButtonCalibrationFlow : MonoBehaviour
         contextPriorModel?.ResetUserPriors();
         startScreenRoot?.SetActive(false);
         SetFeedback("캘리브레이션 없이 시작합니다. 기본 Gaussian 보정이 적용됩니다.", Color.white);
+        HideFeedbackAfterDelay(2.4f);
         gameManager?.BeginPrototype();
     }
 
@@ -374,6 +389,7 @@ public class FourButtonCalibrationFlow : MonoBehaviour
         contextPriorModel?.ResetUserPriors();
         startScreenRoot?.SetActive(false);
         SetFeedback("기본 버튼 조건으로 시작합니다. 버튼 원 안의 직접 입력만 실행됩니다.", Color.white);
+        HideFeedbackAfterDelay(2.4f);
         gameManager?.BeginPrototype();
     }
 
@@ -510,12 +526,14 @@ public class FourButtonCalibrationFlow : MonoBehaviour
     {
         if (contextPriorModel == null)
         {
+            LogCalibrationEvent("touch_rejected", trial, false, screenPosition, "", false, 0f, "", "context_prior_unavailable");
             SetFeedback("Context prior model is unavailable.", Color.yellow);
             return false;
         }
 
         if (!touchManager.IsTouchNearAction(trial.targetAction, screenPosition, trial.maxAcceptDistance))
         {
+            LogCalibrationEvent("touch_rejected", trial, false, screenPosition, "", false, 0f, "", "not_near_target");
             SetFeedback($"상황 샘플을 위해 {trial.targetAction} 버튼 근처를 누르세요.", Color.yellow);
             return false;
         }
@@ -554,6 +572,16 @@ public class FourButtonCalibrationFlow : MonoBehaviour
         SetFeedback(
             $"{UserContextPriorModel.ScenarioLabel(trial.scenario)} 상황 입력: {actionName} {(executed ? "실행" : "기록")} {(directHit && resolvedAsTarget ? "직접" : "의도")} 판정={(resolved ? resolvedActionName : "없음")} conf={confidence:F2}\n{modelState}\n{contextModelState} | {(updatesContextPrior ? contextPriorModel.Summary(trial.scenario) : "터치 모델만 업데이트")}",
             Color.cyan);
+        LogCalibrationEvent(
+            "touch_accepted",
+            trial,
+            true,
+            screenPosition,
+            resolved ? resolvedActionName : "",
+            directHit,
+            confidence,
+            directHit ? "combat spread" : "combat inferred",
+            $"{(executed ? "executed" : "recorded")} target={actionName} resolved={(resolved ? resolvedActionName : "none")} context_prior_updated={updatesContextPrior}");
 
         ignoreInputUntil = Time.unscaledTime + Mathf.Max(0.08f, combatScenarioSettleSeconds);
         StopCombatAdvanceRoutine();
@@ -807,6 +835,11 @@ public class FourButtonCalibrationFlow : MonoBehaviour
         {
             conditionManager = FindAnyObjectByType<ConditionManager>();
         }
+
+        if (sessionManager == null)
+        {
+            sessionManager = FindAnyObjectByType<ExperimentSessionManager>();
+        }
     }
 
     private void ApplyParticipantAndCondition(string condition)
@@ -815,7 +848,56 @@ public class FourButtonCalibrationFlow : MonoBehaviour
             ? participantConfig.ApplyParticipantInput()
             : "test_user";
         conditionManager?.SetCondition(condition);
+        sessionManager?.EnsureSession();
+        LogCalibrationEvent("condition_selected", default, true, default, "", false, 0f, "", condition);
         Debug.Log($"[ADUI] Evaluation start participant={participantId} condition={condition}");
+    }
+
+    private void LogCalibrationEvent(
+        string eventType,
+        CalibrationTrial trial,
+        bool accepted,
+        Vector2 touchPosition,
+        string resolvedAction,
+        bool directHit,
+        float confidence,
+        string modelEffect,
+        string message)
+    {
+        ResolveReferences();
+        if (sessionManager == null || sessionManager.exporter == null)
+        {
+            return;
+        }
+
+        var record = new ADUICalibrationEventRecord
+        {
+            session_id = sessionManager.sessionId,
+            participant_id = sessionManager.ParticipantId(),
+            condition = conditionManager != null ? conditionManager.currentCondition : "",
+            timestamp_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            event_type = eventType ?? "",
+            trial_index = CurrentTrialIndex >= 0 ? CurrentTrialIndex + 1 : 0,
+            total_trials = trials.Count,
+            trial_type = trial.trialType ?? "",
+            target_action = trial.targetAction ?? "",
+            scenario = trial.isCombatScenario ? UserContextPriorModel.ScenarioLabel(trial.scenario) : "",
+            instruction = trial.instruction ?? "",
+            accepted = accepted,
+            use_for_model = trial.useForModel,
+            affects_center_bias = trial.affectsCenterBias,
+            is_validation = trial.isValidation,
+            is_combat_scenario = trial.isCombatScenario,
+            touch_x = touchPosition.x,
+            touch_y = touchPosition.y,
+            resolved_action = resolvedAction ?? "",
+            direct_hit = directHit,
+            confidence = confidence,
+            model_effect = modelEffect ?? "",
+            message = message ?? ""
+        };
+
+        sessionManager.exporter.AppendJsonl(sessionManager.EnsureSession(), "calibration_events.jsonl", record);
     }
 
     private void SetFeedback(string message, Color color)
@@ -838,6 +920,12 @@ public class FourButtonCalibrationFlow : MonoBehaviour
 
     private void HideFeedback()
     {
+        if (hideFeedbackRoutine != null)
+        {
+            StopCoroutine(hideFeedbackRoutine);
+            hideFeedbackRoutine = null;
+        }
+
         if (feedbackGroup != null)
         {
             feedbackGroup.alpha = 0f;
@@ -847,6 +935,23 @@ public class FourButtonCalibrationFlow : MonoBehaviour
         {
             feedbackText.text = string.Empty;
         }
+    }
+
+    private void HideFeedbackAfterDelay(float seconds)
+    {
+        if (hideFeedbackRoutine != null)
+        {
+            StopCoroutine(hideFeedbackRoutine);
+        }
+
+        hideFeedbackRoutine = StartCoroutine(HideFeedbackAfterDelayRoutine(seconds));
+    }
+
+    private IEnumerator HideFeedbackAfterDelayRoutine(float seconds)
+    {
+        yield return new WaitForSeconds(Mathf.Max(0.1f, seconds));
+        hideFeedbackRoutine = null;
+        HideFeedback();
     }
 
     private struct CalibrationTrial

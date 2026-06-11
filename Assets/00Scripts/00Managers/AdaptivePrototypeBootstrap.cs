@@ -70,6 +70,9 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
             out TextMeshProUGUI scenarioTagText,
             out TextMeshProUGUI dangerIndicatorText,
             out TextMeshProUGUI correctionToastText,
+            out CanvasGroup bossHudGroup,
+            out Image bossHpFillImage,
+            out TextMeshProUGUI bossHpText,
             out CanvasGroup researchOverlayGroup,
             out TextMeshProUGUI researchOverlayText);
 
@@ -91,7 +94,7 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
             out Button noCalibrationStartButton,
             out Button calibrationStartButton,
             out TMP_InputField participantIdInput);
-        GameObject resultScreen = CreateResultScreen(canvas.transform, out TextMeshProUGUI resultText, out Button restartButton);
+        GameObject resultScreen = CreateResultScreen(canvas.transform, out TextMeshProUGUI resultText, out Button restartButton, out Button copyLogsButton);
 
         GameObject managerObject = new GameObject("Game Manager");
         CombatManager combatManager = managerObject.AddComponent<CombatManager>();
@@ -122,13 +125,20 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         gameManager.skipButton = skipButton;
         gameManager.startButton = noCalibrationStartButton;
         gameManager.restartButton = restartButton;
+        gameManager.copyLogsButton = copyLogsButton;
         gameManager.startScreenRoot = startScreen;
         gameManager.resultScreenRoot = resultScreen;
         gameManager.stageText = stageText;
         gameManager.resultText = resultText;
         gameManager.startStageOnPlay = startGameOnPlay && !runCalibrationBeforeGame;
         gameManager.startingStage = gameStartStage;
+        if (int.TryParse(ReadCommandLineArgument("-kthStartStage"), out int commandLineStartStage))
+        {
+            gameManager.startingStage = Mathf.Clamp(commandLineStartStage, 1, 3);
+        }
+
         gameManager.evaluationLogger = evaluationLogger;
+        gameManager.sessionManager = sessionManager;
 
         combatManager.gameManager = gameManager;
         combatManager.playerController = player;
@@ -173,6 +183,9 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         gameHudController.scenarioTagText = scenarioTagText;
         gameHudController.dangerIndicatorText = dangerIndicatorText;
         gameHudController.correctionToastText = correctionToastText;
+        gameHudController.bossHudGroup = bossHudGroup;
+        gameHudController.bossHpFillImage = bossHpFillImage;
+        gameHudController.bossHpText = bossHpText;
         gameHudController.researchOverlayGroup = researchOverlayGroup;
         gameHudController.researchOverlayText = researchOverlayText;
 
@@ -228,6 +241,7 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         calibrationFlow.gameManager = gameManager;
         calibrationFlow.participantConfig = participantConfig;
         calibrationFlow.conditionManager = conditionManager;
+        calibrationFlow.sessionManager = sessionManager;
         calibrationFlow.startScreenRoot = startScreen;
         calibrationFlow.startButton = calibrationStartButton;
         calibrationFlow.rawStartButton = rawStartButton;
@@ -260,7 +274,7 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
 
         Camera camera = cameraObject.AddComponent<Camera>();
         camera.orthographic = true;
-        camera.orthographicSize = 5.4f;
+        camera.orthographicSize = 4.35f;
         camera.backgroundColor = new Color(0.06f, 0.08f, 0.08f, 1f);
         camera.clearFlags = CameraClearFlags.SolidColor;
 
@@ -371,10 +385,10 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         RectTransform promptPanel = CreateRectTransform(
             "Calibration Prompt Panel",
             parent,
-            new Vector2(0.5f, 0f),
-            new Vector2(0.5f, 0f),
-            new Vector2(0f, 138f),
-            new Vector2(860f, 132f));
+            new Vector2(0.5f, 1f),
+            new Vector2(0.5f, 1f),
+            new Vector2(0f, -300f),
+            new Vector2(860f, 104f));
 
         Image background = promptPanel.gameObject.AddComponent<Image>();
         background.sprite = PrototypeVisualFactory.SquareSprite;
@@ -418,13 +432,16 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         out TextMeshProUGUI scenarioTagText,
         out TextMeshProUGUI dangerIndicatorText,
         out TextMeshProUGUI correctionToastText,
+        out CanvasGroup bossHudGroup,
+        out Image bossHpFillImage,
+        out TextMeshProUGUI bossHpText,
         out CanvasGroup researchOverlayGroup,
         out TextMeshProUGUI researchOverlayText)
     {
-        RectTransform hudRoot = CreateRectTransform("Adaptive Player HUD", parent, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(200f, -96f), new Vector2(360f, 152f));
+        RectTransform hudRoot = CreateRectTransform("Adaptive Player HUD", parent, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 92f), new Vector2(360f, 56f));
         playerHudGroup = hudRoot.gameObject.AddComponent<CanvasGroup>();
 
-        RectTransform hpBar = CreateRectTransform("HP Bar", hudRoot, new Vector2(0f, 1f), new Vector2(0f, 1f), new Vector2(160f, -28f), new Vector2(320f, 42f));
+        RectTransform hpBar = CreateRectTransform("HP Bar", hudRoot, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, new Vector2(340f, 42f));
         Image hpBackground = hpBar.gameObject.AddComponent<Image>();
         hpBackground.sprite = PrototypeVisualFactory.SquareSprite;
         hpBackground.color = new Color(0.015f, 0.018f, 0.02f, 0.94f);
@@ -459,6 +476,34 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         scenarioTagText.color = new Color(0.92f, 0.96f, 1f, 1f);
         dangerIndicatorText = CreateText(parent, "Danger Indicator Text", "STABLE", new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -116f), new Vector2(430f, 34f), 18, TextAlignmentOptions.Center);
         dangerIndicatorText.fontStyle = FontStyles.Bold;
+
+        RectTransform bossBar = CreateRectTransform("Boss HP Bar", parent, new Vector2(0.5f, 1f), new Vector2(0.5f, 1f), new Vector2(0f, -158f), new Vector2(540f, 34f));
+        bossHudGroup = bossBar.gameObject.AddComponent<CanvasGroup>();
+        bossHudGroup.alpha = 0f;
+        bossHudGroup.interactable = false;
+        bossHudGroup.blocksRaycasts = false;
+
+        Image bossBackground = bossBar.gameObject.AddComponent<Image>();
+        bossBackground.sprite = PrototypeVisualFactory.SquareSprite;
+        bossBackground.color = new Color(0.025f, 0.018f, 0.03f, 0.94f);
+        bossBackground.raycastTarget = false;
+
+        RectTransform bossFill = CreateRectTransform("Boss HP Fill", bossBar, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        bossFill.offsetMin = new Vector2(4f, 4f);
+        bossFill.offsetMax = new Vector2(-4f, -4f);
+        bossHpFillImage = bossFill.gameObject.AddComponent<Image>();
+        bossHpFillImage.sprite = PrototypeVisualFactory.SquareSprite;
+        bossHpFillImage.type = Image.Type.Filled;
+        bossHpFillImage.fillMethod = Image.FillMethod.Horizontal;
+        bossHpFillImage.fillOrigin = (int)Image.OriginHorizontal.Left;
+        bossHpFillImage.fillAmount = 0f;
+        bossHpFillImage.color = new Color(0.7f, 0.28f, 0.92f, 0.95f);
+        bossHpFillImage.raycastTarget = false;
+
+        bossHpText = CreateText(bossBar, "Boss HP Text", string.Empty, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero, 17, TextAlignmentOptions.Center);
+        bossHpText.fontStyle = FontStyles.Bold;
+        bossHpText.outlineWidth = 0.16f;
+        bossHpText.outlineColor = new Color(0f, 0f, 0f, 0.95f);
 
         correctionToastText = CreateText(parent, "Correction Toast Text", string.Empty, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 154f), new Vector2(620f, 42f), 22, TextAlignmentOptions.Center);
         correctionToastText.fontStyle = FontStyles.Bold;
@@ -583,13 +628,14 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         return input;
     }
 
-    private GameObject CreateResultScreen(Transform parent, out TextMeshProUGUI resultText, out Button restartButton)
+    private GameObject CreateResultScreen(Transform parent, out TextMeshProUGUI resultText, out Button restartButton, out Button copyLogsButton)
     {
         GameObject screen = CreateOverlayPanel(parent, "Result Screen", new Color(0.02f, 0.03f, 0.03f, 0.9f));
-        resultText = CreateText(screen.transform, "Result Text", "Final Results", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 72f), new Vector2(860f, 690f), 22, TextAlignmentOptions.TopLeft);
+        resultText = CreateText(screen.transform, "Result Text", "Final Results", new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0f, 96f), new Vector2(1040f, 630f), 18, TextAlignmentOptions.TopLeft);
         resultText.textWrappingMode = TextWrappingModes.Normal;
 
-        restartButton = CreateMenuButton(screen.transform, "Restart Button", "Restart", new Vector2(0f, -410f), new Vector2(250f, 70f), new Color(0.18f, 0.72f, 0.44f, 0.95f));
+        copyLogsButton = CreateMenuButton(screen.transform, "Copy Logs Button", "Copy Time-Series JSON", new Vector2(-190f, -410f), new Vector2(330f, 70f), new Color(0.24f, 0.46f, 0.82f, 0.95f));
+        restartButton = CreateMenuButton(screen.transform, "Restart Button", "Restart", new Vector2(190f, -410f), new Vector2(250f, 70f), new Color(0.18f, 0.72f, 0.44f, 0.95f));
         screen.SetActive(false);
         return screen;
     }
