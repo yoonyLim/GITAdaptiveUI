@@ -9,8 +9,8 @@ using UnityEngine.UI;
 public class RoguelikeGameManager : MonoBehaviour
 {
     public static RoguelikeGameManager Instance;
-    public const float ArenaHalfWidth = 8.6f;
-    public const float ArenaHalfHeight = 6.2f;
+    public const float ArenaHalfWidth = 5.2f;
+    public const float ArenaHalfHeight = 3.55f;
     public const float PlayerArenaPadding = 0.72f;
     public const float EnemyArenaPadding = 0.52f;
 
@@ -33,8 +33,8 @@ public class RoguelikeGameManager : MonoBehaviour
     public Transform playerTransform;
     public PlayerController playerController;
     public Transform enemyRoot;
-    public float spawnRadius = 5.2f;
-    public float spawnRadiusJitter = 0.75f;
+    public float spawnRadius = 3.0f;
+    public float spawnRadiusJitter = 0.32f;
     public bool startStageOnPlay;
     public int startingStage = 1;
 
@@ -518,15 +518,15 @@ public class RoguelikeGameManager : MonoBehaviour
             case 2:
                 SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.18f, 0.58f), false, false, false);
                 SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(-1.1f, -0.92f), false, false, false);
-                SpawnCalibrationEnemy(rangedEnemyPrefab, EnemyKind.Ranged, playerPosition + new Vector2(4.8f, 1.55f), false, false, true);
-                SpawnCalibrationProjectile(playerPosition + new Vector2(2.9f, -0.55f), new Vector2(-1f, 0.1f), 0, true);
+                SpawnCalibrationEnemy(rangedEnemyPrefab, EnemyKind.Ranged, playerPosition + new Vector2(2.65f, 0.95f), false, false, true);
+                SpawnCalibrationProjectile(playerPosition + new Vector2(1.8f, -0.45f), new Vector2(-1f, 0.1f), 0, true);
                 break;
             case 3:
                 SetCalibrationHp(Mathf.CeilToInt((playerController != null ? playerController.maxHP : 100) * 0.28f));
-                SpawnCalibrationEnemy(bossEnemyPrefab, EnemyKind.Boss, playerPosition + new Vector2(3.2f, 0.95f), false, false, false);
+                SpawnCalibrationEnemy(bossEnemyPrefab, EnemyKind.Boss, playerPosition + new Vector2(2.05f, 0.72f), false, false, false);
                 SpawnCalibrationEnemy(meleeEnemyPrefab, EnemyKind.Melee, playerPosition + new Vector2(1.32f, -0.18f), true, false, true);
-                SpawnCalibrationEnemy(rangedEnemyPrefab, EnemyKind.Ranged, playerPosition + new Vector2(-4.1f, 1.45f), false, false, true);
-                SpawnCalibrationProjectile(playerPosition + new Vector2(-2.8f, 0.72f), new Vector2(1f, -0.12f), 0, true);
+                SpawnCalibrationEnemy(rangedEnemyPrefab, EnemyKind.Ranged, playerPosition + new Vector2(-2.45f, 0.92f), false, false, true);
+                SpawnCalibrationProjectile(playerPosition + new Vector2(-1.75f, 0.56f), new Vector2(1f, -0.12f), 0, true);
                 break;
             default:
                 return false;

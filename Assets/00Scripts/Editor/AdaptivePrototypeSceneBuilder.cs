@@ -18,6 +18,7 @@ public static class AdaptivePrototypeSceneBuilder
     private const float ActionButtonLabelWidth = 74f;
     private const float ActionButtonClusterCenterOffset = 209f;
     private const float ActionButtonClusterSpacing = 142f;
+    private const float GameplayCameraOrthographicSize = 3.85f;
 
     [MenuItem("Tools/Adaptive UI/Create Prototype Scene")]
     public static void CreateScene()
@@ -137,7 +138,7 @@ public static class AdaptivePrototypeSceneBuilder
 
         Camera camera = cameraObject.AddComponent<Camera>();
         camera.orthographic = true;
-        camera.orthographicSize = 4.35f;
+        camera.orthographicSize = GameplayCameraOrthographicSize;
         camera.backgroundColor = new Color(0.06f, 0.08f, 0.08f, 1f);
         camera.clearFlags = CameraClearFlags.SolidColor;
 

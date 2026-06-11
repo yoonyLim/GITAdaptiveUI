@@ -11,6 +11,7 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
     private const float ActionButtonLabelWidth = 74f;
     private const float ActionButtonClusterCenterOffset = 209f;
     private const float ActionButtonClusterSpacing = 142f;
+    private const float GameplayCameraOrthographicSize = 3.85f;
 
     public bool buildOnAwake = true;
 
@@ -28,6 +29,12 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
 
     private void Awake()
     {
+        Screen.orientation = ScreenOrientation.LandscapeLeft;
+        Screen.autorotateToPortrait = false;
+        Screen.autorotateToPortraitUpsideDown = false;
+        Screen.autorotateToLandscapeLeft = true;
+        Screen.autorotateToLandscapeRight = true;
+
         if (!buildOnAwake || FindAnyObjectByType<RoguelikeGameManager>() != null)
         {
             return;
@@ -274,7 +281,7 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
 
         Camera camera = cameraObject.AddComponent<Camera>();
         camera.orthographic = true;
-        camera.orthographicSize = 4.35f;
+        camera.orthographicSize = GameplayCameraOrthographicSize;
         camera.backgroundColor = new Color(0.06f, 0.08f, 0.08f, 1f);
         camera.clearFlags = CameraClearFlags.SolidColor;
 
@@ -288,6 +295,9 @@ public class AdaptivePrototypeBootstrap : MonoBehaviour
         {
             return;
         }
+
+        mainCamera.orthographic = true;
+        mainCamera.orthographicSize = GameplayCameraOrthographicSize;
 
         TopDownCameraFollow follow = mainCamera.GetComponent<TopDownCameraFollow>();
         if (follow == null)

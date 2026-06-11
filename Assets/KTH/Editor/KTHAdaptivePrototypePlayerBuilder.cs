@@ -57,6 +57,11 @@ public static class KTHAdaptivePrototypePlayerBuilder
         EditorUserBuildSettings.buildAppBundle = false;
         PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, AndroidApplicationId);
         PlayerSettings.Android.bundleVersionCode = 1;
+        PlayerSettings.defaultInterfaceOrientation = UIOrientation.LandscapeLeft;
+        PlayerSettings.allowedAutorotateToPortrait = false;
+        PlayerSettings.allowedAutorotateToPortraitUpsideDown = false;
+        PlayerSettings.allowedAutorotateToLandscapeLeft = true;
+        PlayerSettings.allowedAutorotateToLandscapeRight = true;
 
         var options = new BuildPlayerOptions
         {
